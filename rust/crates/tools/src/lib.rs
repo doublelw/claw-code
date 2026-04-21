@@ -1325,46 +1325,26 @@ fn maybe_enforce_permission_check_with_mode(
 
 #[allow(clippy::needless_pass_by_value)]
 fn run_ask_user_question(input: AskUserQuestionInput) -> Result<String, String> {
-    use std::io::{self, BufRead, Write};
+    use dialoguer::{theme::ColorfulTheme, Input, Select};
 
-    // Display the question to the user via stdout
-    let stdout = io::stdout();
-    let stdin = io::stdin();
-    let mut out = stdout.lock();
+    let theme = ColorfulTheme::default();
 
-    writeln!(out, "\n[Question] {}", input.question).map_err(|e| e.to_string())?;
-
-    if let Some(ref options) = input.options {
-        for (i, option) in options.iter().enumerate() {
-            writeln!(out, "  {}. {}", i + 1, option).map_err(|e| e.to_string())?;
-        }
-        write!(out, "Enter choice (1-{}): ", options.len()).map_err(|e| e.to_string())?;
-    } else {
-        write!(out, "Your answer: ").map_err(|e| e.to_string())?;
-    }
-    out.flush().map_err(|e| e.to_string())?;
-
-    // Read user response from stdin
-    let mut response = String::new();
-    stdin
-        .lock()
-        .read_line(&mut response)
-        .map_err(|e| e.to_string())?;
-    let response = response.trim().to_string();
-
-    // If options were provided, resolve the numeric choice
     let answer = if let Some(ref options) = input.options {
-        if let Ok(idx) = response.parse::<usize>() {
-            if idx >= 1 && idx <= options.len() {
-                options[idx - 1].clone()
-            } else {
-                response.clone()
-            }
-        } else {
-            response.clone()
-        }
+        let selection = Select::with_theme(&theme)
+            .with_prompt(&input.question)
+            .items(options)
+            .default(0)
+            .interact()
+            .map_err(|e| e.to_string())?;
+        
+        options[selection].clone()
     } else {
-        response.clone()
+        let text: String = Input::with_theme(&theme)
+            .with_prompt(&input.question)
+            .interact_text()
+            .map_err(|e| e.to_string())?;
+        
+        text
     };
 
     to_pretty_json(json!({

@@ -149,10 +149,9 @@ Canonical scenario map: `rust/mock_parity_scenarios.json`
 - Existing product tools in `mvp_tool_specs()` include `WebFetch`, `WebSearch`, `TodoWrite`, `Skill`, `Agent`, `ToolSearch`, `NotebookEdit`, `Sleep`, `SendUserMessage`, `Config`, `EnterPlanMode`, `ExitPlanMode`, `StructuredOutput`, `REPL`, and `PowerShell`.
 - The 9-lane push replaced pure fixed-payload stubs for `Task*`, `Team*`, `Cron*`, `LSP`, and MCP tools with registry-backed handlers on `main`.
 - `Brief` is handled as an execution alias in `execute_tool()`, but it is not a separately exposed tool spec in `mvp_tool_specs()`.
+- `AskUserQuestion` now features real interactive terminal UI wiring via `dialoguer`.
 
 ### Still limited or intentionally shallow
-
-- `AskUserQuestion` still returns a pending response payload rather than real interactive UI wiring.
 - `RemoteTrigger` remains a stub response.
 - `TestingPermission` remains test-only.
 - Task, team, cron, MCP, and LSP are no longer just fixed-payload stubs in `execute_tool()`, but several remain registry-backed approximations rather than full external-runtime integrations.

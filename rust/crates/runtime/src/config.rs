@@ -80,6 +80,7 @@ pub struct RuntimeFeatureConfig {
     sandbox: SandboxConfig,
     provider_fallbacks: ProviderFallbackConfig,
     trusted_roots: Vec<String>,
+    disable_workflows: bool,
 }
 
 /// Ordered chain of fallback model identifiers used when the primary
@@ -97,6 +98,11 @@ pub struct RuntimeHookConfig {
     pre_tool_use: Vec<String>,
     post_tool_use: Vec<String>,
     post_tool_use_failure: Vec<String>,
+    notification: Vec<String>,
+    stop: Vec<String>,
+    teammate_idle: Vec<String>,
+    task_created: Vec<String>,
+    task_completed: Vec<String>,
 }
 
 /// Raw permission rule lists grouped by allow, deny, and ask behavior.
@@ -338,6 +344,7 @@ impl ConfigLoader {
             sandbox: parse_optional_sandbox_config(&merged_value)?,
             provider_fallbacks: parse_optional_provider_fallbacks(&merged_value)?,
             trusted_roots: parse_optional_trusted_roots(&merged_value)?,
+            disable_workflows: parse_optional_bool(&merged_value, "disableWorkflows").unwrap_or(false),
         };
 
         Ok(RuntimeConfig {
@@ -395,6 +402,7 @@ impl ConfigLoader {
             sandbox: parse_optional_sandbox_config(&merged_value)?,
             provider_fallbacks: parse_optional_provider_fallbacks(&merged_value)?,
             trusted_roots: parse_optional_trusted_roots(&merged_value)?,
+            disable_workflows: parse_optional_bool(&merged_value, "disableWorkflows").unwrap_or(false),
         };
 
         let config = RuntimeConfig {
@@ -574,6 +582,11 @@ impl RuntimeFeatureConfig {
     #[must_use]
     pub fn trusted_roots(&self) -> &[String] {
         &self.trusted_roots
+    }
+
+    #[must_use]
+    pub fn disable_workflows(&self) -> bool {
+        self.disable_workflows
     }
 
     /// Merge this config's default trusted roots with per-call roots.
@@ -781,6 +794,11 @@ impl RuntimeHookConfig {
             pre_tool_use,
             post_tool_use,
             post_tool_use_failure,
+            notification: Vec::new(),
+            stop: Vec::new(),
+            teammate_idle: Vec::new(),
+            task_created: Vec::new(),
+            task_completed: Vec::new(),
         }
     }
 
@@ -808,11 +826,68 @@ impl RuntimeHookConfig {
             &mut self.post_tool_use_failure,
             other.post_tool_use_failure(),
         );
+        extend_unique(&mut self.notification, other.notification());
+        extend_unique(&mut self.stop, other.stop());
     }
 
     #[must_use]
     pub fn post_tool_use_failure(&self) -> &[String] {
         &self.post_tool_use_failure
+    }
+
+    #[must_use]
+    pub fn notification(&self) -> &[String] {
+        &self.notification
+    }
+
+    #[must_use]
+    pub fn stop(&self) -> &[String] {
+        &self.stop
+    }
+
+    #[must_use]
+    pub fn with_notification(mut self, commands: Vec<String>) -> Self {
+        self.notification = commands;
+        self
+    }
+
+    #[must_use]
+    pub fn with_stop(mut self, commands: Vec<String>) -> Self {
+        self.stop = commands;
+        self
+    }
+
+    #[must_use]
+    pub fn teammate_idle(&self) -> &[String] {
+        &self.teammate_idle
+    }
+
+    #[must_use]
+    pub fn task_created(&self) -> &[String] {
+        &self.task_created
+    }
+
+    #[must_use]
+    pub fn task_completed(&self) -> &[String] {
+        &self.task_completed
+    }
+
+    #[must_use]
+    pub fn with_teammate_idle(mut self, commands: Vec<String>) -> Self {
+        self.teammate_idle = commands;
+        self
+    }
+
+    #[must_use]
+    pub fn with_task_created(mut self, commands: Vec<String>) -> Self {
+        self.task_created = commands;
+        self
+    }
+
+    #[must_use]
+    pub fn with_task_completed(mut self, commands: Vec<String>) -> Self {
+        self.task_completed = commands;
+        self
     }
 }
 
@@ -994,6 +1069,11 @@ fn parse_optional_hooks_config_object(
         post_tool_use: optional_string_array(hooks, "PostToolUse", context)?.unwrap_or_default(),
         post_tool_use_failure: optional_string_array(hooks, "PostToolUseFailure", context)?
             .unwrap_or_default(),
+        notification: optional_string_array(hooks, "Notification", context)?.unwrap_or_default(),
+        stop: optional_string_array(hooks, "Stop", context)?.unwrap_or_default(),
+        teammate_idle: optional_string_array(hooks, "TeammateIdle", context)?.unwrap_or_default(),
+        task_created: optional_string_array(hooks, "TaskCreated", context)?.unwrap_or_default(),
+        task_completed: optional_string_array(hooks, "TaskCompleted", context)?.unwrap_or_default(),
     })
 }
 
@@ -1293,6 +1373,10 @@ fn optional_string<'a>(
     }
 }
 
+fn parse_optional_bool(value: &JsonValue, key: &str) -> Option<bool> {
+    value.as_object()?.get(key)?.as_bool()
+}
+
 fn optional_bool(
     object: &BTreeMap<String, JsonValue>,
     key: &str,
@@ -1483,6 +1567,7 @@ mod tests {
     };
     use crate::json::JsonValue;
     use crate::sandbox::FilesystemIsolationMode;
+    use std::collections::BTreeMap;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -2398,5 +2483,77 @@ mod tests {
         );
 
         fs::remove_dir_all(root).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn parses_notification_hooks_from_json() {
+        let mut hooks_map = BTreeMap::new();
+        let mut inner = BTreeMap::new();
+        inner.insert("Notification".to_string(), JsonValue::Array(vec![JsonValue::String("echo 'notified'".to_string())]));
+        hooks_map.insert("hooks".to_string(), JsonValue::Object(inner));
+        let root = JsonValue::Object(hooks_map);
+        let hooks = super::parse_optional_hooks_config(&root).expect("parse hooks");
+        assert_eq!(hooks.notification(), &["echo 'notified'".to_string()]);
+        assert!(hooks.pre_tool_use().is_empty());
+        assert!(hooks.stop().is_empty());
+    }
+
+    #[test]
+    fn parses_stop_hooks_from_json() {
+        let mut hooks_map = BTreeMap::new();
+        let mut inner = BTreeMap::new();
+        inner.insert("Stop".to_string(), JsonValue::Array(vec![JsonValue::String("echo 'stopped'".to_string())]));
+        hooks_map.insert("hooks".to_string(), JsonValue::Object(inner));
+        let root = JsonValue::Object(hooks_map);
+        let hooks = super::parse_optional_hooks_config(&root).expect("parse hooks");
+        assert_eq!(hooks.stop(), &["echo 'stopped'".to_string()]);
+        assert!(hooks.pre_tool_use().is_empty());
+    }
+
+    #[test]
+    fn parses_all_five_hook_types_from_json() {
+        let mut hooks_map = BTreeMap::new();
+        let mut inner = BTreeMap::new();
+        inner.insert("PreToolUse".to_string(), JsonValue::Array(vec![JsonValue::String("pre.sh".to_string())]));
+        inner.insert("PostToolUse".to_string(), JsonValue::Array(vec![JsonValue::String("post.sh".to_string())]));
+        inner.insert("PostToolUseFailure".to_string(), JsonValue::Array(vec![JsonValue::String("fail.sh".to_string())]));
+        inner.insert("Notification".to_string(), JsonValue::Array(vec![JsonValue::String("notify.sh".to_string())]));
+        inner.insert("Stop".to_string(), JsonValue::Array(vec![JsonValue::String("stop.sh".to_string())]));
+        hooks_map.insert("hooks".to_string(), JsonValue::Object(inner));
+        let root = JsonValue::Object(hooks_map);
+        let hooks = super::parse_optional_hooks_config(&root).expect("parse hooks");
+        assert_eq!(hooks.pre_tool_use(), &["pre.sh".to_string()]);
+        assert_eq!(hooks.post_tool_use(), &["post.sh".to_string()]);
+        assert_eq!(hooks.post_tool_use_failure(), &["fail.sh".to_string()]);
+        assert_eq!(hooks.notification(), &["notify.sh".to_string()]);
+        assert_eq!(hooks.stop(), &["stop.sh".to_string()]);
+    }
+
+    #[test]
+    fn defaults_notification_and_stop_to_empty_when_absent() {
+        let mut hooks_map = BTreeMap::new();
+        let mut inner = BTreeMap::new();
+        inner.insert("PreToolUse".to_string(), JsonValue::Array(vec![JsonValue::String("pre.sh".to_string())]));
+        hooks_map.insert("hooks".to_string(), JsonValue::Object(inner));
+        let root = JsonValue::Object(hooks_map);
+        let hooks = super::parse_optional_hooks_config(&root).expect("parse hooks");
+        assert_eq!(hooks.pre_tool_use(), &["pre.sh".to_string()]);
+        assert!(hooks.notification().is_empty());
+        assert!(hooks.stop().is_empty());
+    }
+
+    #[test]
+    fn hook_config_builder_chains_correctly() {
+        let config = RuntimeHookConfig::new(
+            vec!["pre".to_string()],
+            vec!["post".to_string()],
+            vec!["fail".to_string()],
+        )
+        .with_notification(vec!["notify".to_string()])
+        .with_stop(vec!["stop".to_string()]);
+
+        assert_eq!(config.pre_tool_use(), &["pre".to_string()]);
+        assert_eq!(config.notification(), &["notify".to_string()]);
+        assert_eq!(config.stop(), &["stop".to_string()]);
     }
 }

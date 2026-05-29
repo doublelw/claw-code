@@ -296,6 +296,18 @@ where
         }
     }
 
+    /// Fire notification hooks (informational, non-blocking).
+    /// Called when an API response stream starts.
+    pub fn run_notification_hooks(&self, context: &str) -> HookRunResult {
+        self.hook_runner.run_notification(context)
+    }
+
+    /// Fire stop hooks (informational, best-effort).
+    /// Called when the session is terminating.
+    pub fn run_stop_hooks(&self, context: &str) -> HookRunResult {
+        self.hook_runner.run_stop(context)
+    }
+
     /// Run a session health probe to verify the runtime is functional after compaction.
     /// Returns Ok(()) if healthy, Err if the session appears broken.
     fn run_session_health_probe(&mut self) -> Result<(), String> {
@@ -365,6 +377,11 @@ where
                     return Err(error);
                 }
             };
+
+            // Fire notification hooks on first API response (informational only).
+            if iterations == 1 {
+                self.run_notification_hooks("api_stream_started");
+            }
             let (assistant_message, usage, turn_prompt_cache_events) =
                 match build_assistant_message(events) {
                     Ok(result) => result,

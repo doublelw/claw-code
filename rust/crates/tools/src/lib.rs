@@ -1253,6 +1253,34 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
             }),
             required_permission: PermissionMode::ReadOnly,
         },
+        ToolSpec {
+            name: "EnterWorktree",
+            description: "Create and enter a git worktree for isolated work.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string" },
+                    "base_ref": { "type": "string" }
+                },
+                "required": ["name"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::DangerFullAccess,
+        },
+        ToolSpec {
+            name: "ExitWorktree",
+            description: "Exit and optionally remove a git worktree.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["keep", "remove"] },
+                    "discard_changes": { "type": "boolean" }
+                },
+                "required": ["action"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::DangerFullAccess,
+        },
     ]
 }
 
@@ -1388,6 +1416,8 @@ fn execute_tool_with_enforcer(
         "GitLog" => from_value::<GitLogInput>(input).and_then(run_git_log),
         "GitShow" => from_value::<GitShowInput>(input).and_then(run_git_show),
         "GitBlame" => from_value::<GitBlameInput>(input).and_then(run_git_blame),
+        "EnterWorktree" => from_value::<EnterWorktreeInput>(input).and_then(run_enter_worktree),
+        "ExitWorktree" => from_value::<ExitWorktreeInput>(input).and_then(run_exit_worktree),
         _ => Err(format!("unsupported tool: {name}")),
     }
 }
@@ -2047,6 +2077,55 @@ fn run_git_blame(input: GitBlameInput) -> Result<String, String> {
             "output": output
         })),
         None => Err(format!("git blame {} failed. Ensure the file exists and the directory is inside a git repository.", input.path)),
+    }
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn run_enter_worktree(input: EnterWorktreeInput) -> Result<String, String> {
+    let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+    let manager = runtime::worktree::WorktreeManager::detect(&cwd)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "not in a git repository".to_string())?;
+
+    let info = manager
+        .create(&input.name, input.base_ref.as_deref())
+        .map_err(|e| e.to_string())?;
+
+    to_pretty_json(json!({
+        "name": info.name,
+        "path": info.path.to_string_lossy(),
+        "branch": info.branch,
+        "status": "created"
+    }))
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn run_exit_worktree(input: ExitWorktreeInput) -> Result<String, String> {
+    let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+    let manager = runtime::worktree::WorktreeManager::detect(&cwd)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "not in a git repository".to_string())?;
+
+    // Find current worktree name from path
+    let current_name = cwd
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+
+    match input.action.as_str() {
+        "remove" => {
+            let force = input.discard_changes.unwrap_or(false);
+            manager.remove(&current_name, force).map_err(|e| e.to_string())?;
+            to_pretty_json(json!({
+                "name": current_name,
+                "action": "removed",
+                "force": force
+            }))
+        }
+        _ => to_pretty_json(json!({
+            "name": current_name,
+            "action": "kept"
+        })),
     }
 }
 
@@ -2979,6 +3058,18 @@ struct GitBlameInput {
     #[serde(default)]
     /// End of line range (1-based). Only used if start_line is also set.
     end_line: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct EnterWorktreeInput {
+    name: String,
+    base_ref: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ExitWorktreeInput {
+    action: String,
+    discard_changes: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]

@@ -6,6 +6,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+boa_engine = "0.21"
 sha2 = "0.10"
 glob = "0.3"
 plugins = { path = "../plugins" }
@@ -14,6 +15,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json.workspace = true
 telemetry = { path = "../telemetry" }
 tokio = { version = "1", features = ["io-std", "io-util", "macros", "process", "rt", "rt-multi-thread", "time"] }
+ureq = { version = "3", features = ["json"] }
 walkdir = "2"
 
 [dev-dependencies]

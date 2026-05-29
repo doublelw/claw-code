@@ -23,6 +23,11 @@ pub enum HookEvent {
     PreToolUse,
     PostToolUse,
     PostToolUseFailure,
+    Notification,
+    Stop,
+    TeammateIdle,
+    TaskCreated,
+    TaskCompleted,
 }
 
 impl HookEvent {
@@ -32,6 +37,11 @@ impl HookEvent {
             Self::PreToolUse => "PreToolUse",
             Self::PostToolUse => "PostToolUse",
             Self::PostToolUseFailure => "PostToolUseFailure",
+            Self::Notification => "Notification",
+            Self::Stop => "Stop",
+            Self::TeammateIdle => "TeammateIdle",
+            Self::TaskCreated => "TaskCreated",
+            Self::TaskCompleted => "TaskCompleted",
         }
     }
 }
@@ -305,6 +315,86 @@ impl HookRunner {
             tool_input,
             tool_error,
             abort_signal,
+            None,
+        )
+    }
+
+    /// Run notification hooks. Fired after an API response stream begins.
+    /// Notification hooks cannot deny or rewrite — they are informational only.
+    #[must_use]
+    pub fn run_notification(&self, context: &str) -> HookRunResult {
+        Self::run_commands(
+            HookEvent::Notification,
+            self.config.notification(),
+            "notification",
+            context,
+            None,
+            false,
+            None,
+            None,
+        )
+    }
+
+    /// Run stop hooks. Fired when the session is terminating.
+    /// Stop hooks are informational and run on a best-effort basis.
+    #[must_use]
+    pub fn run_stop(&self, context: &str) -> HookRunResult {
+        Self::run_commands(
+            HookEvent::Stop,
+            self.config.stop(),
+            "stop",
+            context,
+            None,
+            false,
+            None,
+            None,
+        )
+    }
+
+    /// Run teammate idle hooks. Fired when a workflow agent is about to go idle.
+    /// Exit code 2 sends feedback and keeps the agent working.
+    #[must_use]
+    pub fn run_teammate_idle(&self, context: &str) -> HookRunResult {
+        Self::run_commands(
+            HookEvent::TeammateIdle,
+            self.config.teammate_idle(),
+            "teammate_idle",
+            context,
+            None,
+            false,
+            None,
+            None,
+        )
+    }
+
+    /// Run task created hooks. Fired when a workflow task is being created.
+    /// Exit code 2 prevents creation and sends feedback.
+    #[must_use]
+    pub fn run_task_created(&self, context: &str) -> HookRunResult {
+        Self::run_commands(
+            HookEvent::TaskCreated,
+            self.config.task_created(),
+            "task_created",
+            context,
+            None,
+            false,
+            None,
+            None,
+        )
+    }
+
+    /// Run task completed hooks. Fired when a workflow task is marked complete.
+    /// Exit code 2 prevents completion and sends feedback.
+    #[must_use]
+    pub fn run_task_completed(&self, context: &str) -> HookRunResult {
+        Self::run_commands(
+            HookEvent::TaskCompleted,
+            self.config.task_completed(),
+            "task_completed",
+            context,
+            None,
+            false,
+            None,
             None,
         )
     }
@@ -1102,6 +1192,74 @@ mod tests {
                 ..
             }
         )));
+    }
+
+    #[test]
+    fn notification_hook_event_stringifies_correctly() {
+        assert_eq!(HookEvent::Notification.as_str(), "Notification");
+    }
+
+    #[test]
+    fn stop_hook_event_stringifies_correctly() {
+        assert_eq!(HookEvent::Stop.as_str(), "Stop");
+    }
+
+    #[test]
+    fn run_notification_fires_commands() {
+        let runner = HookRunner::new(
+            RuntimeHookConfig::new(Vec::new(), Vec::new(), Vec::new())
+                .with_notification(vec![shell_snippet("printf 'notified'")]),
+        );
+
+        let result = runner.run_notification("api_stream_started");
+        assert_eq!(result, HookRunResult::allow(vec!["notified".to_string()]));
+    }
+
+    #[test]
+    fn run_stop_fires_commands() {
+        let runner = HookRunner::new(
+            RuntimeHookConfig::new(Vec::new(), Vec::new(), Vec::new())
+                .with_stop(vec![shell_snippet("printf 'stopped'")]),
+        );
+
+        let result = runner.run_stop("session_ending");
+        assert_eq!(result, HookRunResult::allow(vec!["stopped".to_string()]));
+    }
+
+    #[test]
+    fn empty_notification_returns_allow() {
+        let runner = HookRunner::new(RuntimeHookConfig::default());
+        let result = runner.run_notification("test");
+        assert_eq!(result, HookRunResult::allow(Vec::new()));
+    }
+
+    #[test]
+    fn empty_stop_returns_allow() {
+        let runner = HookRunner::new(RuntimeHookConfig::default());
+        let result = runner.run_stop("test");
+        assert_eq!(result, HookRunResult::allow(Vec::new()));
+    }
+
+    #[test]
+    fn notification_hook_payload_contains_event_name() {
+        let runner = HookRunner::new(
+            RuntimeHookConfig::new(Vec::new(), Vec::new(), Vec::new())
+                .with_notification(vec![shell_snippet(r#"printf '%s' "$HOOK_EVENT""#)]),
+        );
+
+        let result = runner.run_notification("test_context");
+        assert!(result.messages().iter().any(|m| m == "Notification"));
+    }
+
+    #[test]
+    fn stop_hook_payload_contains_event_name() {
+        let runner = HookRunner::new(
+            RuntimeHookConfig::new(Vec::new(), Vec::new(), Vec::new())
+                .with_stop(vec![shell_snippet(r#"printf '%s' "$HOOK_EVENT""#)]),
+        );
+
+        let result = runner.run_stop("test_context");
+        assert!(result.messages().iter().any(|m| m == "Stop"));
     }
 
     #[cfg(windows)]

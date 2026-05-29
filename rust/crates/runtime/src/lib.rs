@@ -11,8 +11,10 @@ mod bootstrap;
 pub mod branch_lock;
 mod compact;
 mod config;
+pub mod cron_scheduler;
 pub mod config_validate;
 mod conversation;
+pub mod effort;
 mod file_ops;
 pub mod g004_conformance;
 mod git_context;
@@ -21,6 +23,7 @@ mod hooks;
 mod json;
 mod lane_events;
 pub mod lsp_client;
+pub mod lsp_orchestrator;
 mod mcp;
 mod mcp_client;
 pub mod mcp_lifecycle_hardened;
@@ -29,6 +32,7 @@ mod mcp_stdio;
 pub mod mcp_tool_bridge;
 mod oauth;
 pub mod permission_enforcer;
+pub mod permission_classifier;
 mod permissions;
 pub mod plugin_lifecycle;
 mod policy_engine;
@@ -39,9 +43,11 @@ mod report_schema;
 pub mod sandbox;
 mod session;
 pub mod session_control;
+pub mod session_snapshot;
 pub mod trident;
 pub use session_control::SessionStore;
 mod sse;
+pub mod task_executor;
 pub mod stale_base;
 pub mod stale_branch;
 pub mod summary_compression;
@@ -52,6 +58,11 @@ pub mod team_cron_registry;
 mod trust_resolver;
 mod usage;
 pub mod worker_boot;
+pub mod worktree;
+pub mod workflow_orchestrator;
+pub mod workflow_runtime;
+pub mod workflow_script;
+pub mod workflow_store;
 
 pub use approval_tokens::{
     ApprovalDelegationHop, ApprovalScope, ApprovalTokenAudit, ApprovalTokenError,
@@ -64,6 +75,7 @@ pub use compact::{
     compact_session, estimate_session_tokens, format_compact_summary,
     get_compact_continuation_message, should_compact, CompactionConfig, CompactionResult,
 };
+pub use effort::EffortLevel;
 pub use config::{
     ConfigEntry, ConfigError, ConfigLoader, ConfigSource, McpConfigCollection,
     McpManagedProxyServerConfig, McpOAuthConfig, McpRemoteServerConfig, McpSdkServerConfig,
@@ -193,6 +205,15 @@ pub use worker_boot::{
     Worker, WorkerEvent, WorkerEventKind, WorkerEventPayload, WorkerFailure, WorkerFailureKind,
     WorkerPromptTarget, WorkerReadySnapshot, WorkerRegistry, WorkerStatus, WorkerTrustResolution,
 };
+pub use workflow_orchestrator::{
+    OrchestratorError, WorkflowAgent, WorkflowAgentStatus, WorkflowOrchestrator, WorkflowRun,
+    WorkflowRunStatus as WorkflowOrchestratorRunStatus,
+};
+pub use workflow_runtime::{
+    WorkflowError, WorkflowExecutionConfig, WorkflowResult, WorkflowRunStatus, WorkflowRuntime,
+};
+pub use workflow_script::{ScriptValidationError, WorkflowScript};
+pub use workflow_store::{WorkflowEntry, WorkflowSource, WorkflowStore};
 
 #[cfg(test)]
 pub(crate) fn test_env_lock() -> std::sync::MutexGuard<'static, ()> {

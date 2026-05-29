@@ -4557,6 +4557,51 @@ fn run_resume_command(
                 json: Some(json),
             })
         }
+        SlashCommand::Hooks { args } => {
+            let cwd = env::current_dir()?;
+            let loader = ConfigLoader::default_for(&cwd);
+            let runtime_config = loader.load()?;
+            let hooks = runtime_config.hooks();
+            let message = render_hooks_report(args.as_deref(), hooks);
+            let json = render_hooks_json(hooks);
+            Ok(ResumeCommandOutcome {
+                session: session.clone(),
+                message: Some(message),
+                json: Some(json),
+            })
+        }
+        SlashCommand::Theme { name } => {
+            use crate::render::ColorTheme;
+            let message = match name.as_deref() {
+                None | Some("list") => {
+                    format!("Available themes:\n{}", ColorTheme::available_themes().iter().map(|t| format!("  {t}")).collect::<Vec<_>>().join("\n"))
+                }
+                Some(n) => match ColorTheme::from_name(n) {
+                    Some(_) => format!("Theme: {n}"),
+                    None => format!("Unknown theme: {n}"),
+                },
+            };
+            Ok(ResumeCommandOutcome {
+                session: session.clone(),
+                message: Some(message),
+                json: Some(serde_json::json!({"theme": name})),
+            })
+        }
+        SlashCommand::Effort { level } => {
+            use runtime::EffortLevel;
+            let message = match level.as_deref() {
+                None => format!("Effort: {} (default)", EffortLevel::default()),
+                Some(l) => match EffortLevel::from_str(l) {
+                    Some(e) => format!("Effort: {e}"),
+                    None => format!("Unknown effort: {l}"),
+                },
+            };
+            Ok(ResumeCommandOutcome {
+                session: session.clone(),
+                message: Some(message),
+                json: Some(serde_json::json!({"effort": level})),
+            })
+        }
         SlashCommand::Mcp { action, target } => {
             let cwd = env::current_dir()?;
             let args = match (action.as_deref(), target.as_deref()) {
@@ -4790,15 +4835,12 @@ fn run_resume_command(
         | SlashCommand::Plan { .. }
         | SlashCommand::Review { .. }
         | SlashCommand::Tasks { .. }
-        | SlashCommand::Theme { .. }
         | SlashCommand::Voice { .. }
         | SlashCommand::Usage { .. }
         | SlashCommand::Rename { .. }
         | SlashCommand::Copy { .. }
-        | SlashCommand::Hooks { .. }
         | SlashCommand::Context { .. }
         | SlashCommand::Color { .. }
-        | SlashCommand::Effort { .. }
         | SlashCommand::Branch { .. }
         | SlashCommand::Rewind { .. }
         | SlashCommand::Ide { .. }
@@ -5953,6 +5995,18 @@ impl LiveCli {
                 Self::print_config(section.as_deref())?;
                 false
             }
+            SlashCommand::Hooks { args } => {
+                Self::print_hooks(args.as_deref())?;
+                false
+            }
+            SlashCommand::Theme { name } => {
+                Self::print_theme(name.as_deref())?;
+                false
+            }
+            SlashCommand::Effort { level } => {
+                Self::print_effort(level.as_deref())?;
+                false
+            }
             SlashCommand::Mcp { action, target } => {
                 let args = match (action.as_deref(), target.as_deref()) {
                     (None, None) => None,
@@ -6047,15 +6101,12 @@ impl LiveCli {
             | SlashCommand::Plan { .. }
             | SlashCommand::Review { .. }
             | SlashCommand::Tasks { .. }
-            | SlashCommand::Theme { .. }
             | SlashCommand::Voice { .. }
             | SlashCommand::Usage { .. }
             | SlashCommand::Rename { .. }
             | SlashCommand::Copy { .. }
-            | SlashCommand::Hooks { .. }
             | SlashCommand::Context { .. }
             | SlashCommand::Color { .. }
-            | SlashCommand::Effort { .. }
             | SlashCommand::Branch { .. }
             | SlashCommand::Rewind { .. }
             | SlashCommand::Ide { .. }
@@ -6338,6 +6389,67 @@ impl LiveCli {
 
     fn print_config(section: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
         println!("{}", render_config_report(section)?);
+        Ok(())
+    }
+
+    fn print_hooks(args: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+        let cwd = env::current_dir()?;
+        let loader = ConfigLoader::default_for(&cwd);
+        let runtime_config = loader.load()?;
+        let hooks = runtime_config.hooks();
+        match args {
+            Some("list") | None => {
+                println!("{}", render_hooks_report(None, hooks));
+            }
+            Some(other) => {
+                println!("{}", render_hooks_report(Some(other), hooks));
+            }
+        }
+        Ok(())
+    }
+
+    fn print_theme(name: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+        use crate::render::ColorTheme;
+        match name {
+            None | Some("list") => {
+                println!("Available themes:");
+                for theme_name in ColorTheme::available_themes() {
+                    println!("  {theme_name}");
+                }
+            }
+            Some("reset") => {
+                println!("Theme reset to default.");
+            }
+            Some(name) => {
+                match ColorTheme::from_name(name) {
+                    Some(_) => println!("Theme set to: {name}"),
+                    None => {
+                        eprintln!("Unknown theme: {name}");
+                        eprintln!("Available: {}", ColorTheme::available_themes().join(", "));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn print_effort(level: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+        use runtime::EffortLevel;
+        match level {
+            None => {
+                println!("Effort level: {} (default)", EffortLevel::default());
+                println!("Available levels: {}", EffortLevel::all_levels().iter().map(|l| l.as_str()).collect::<Vec<_>>().join(", "));
+            }
+            Some(name) => {
+                match EffortLevel::from_str(name) {
+                    Some(level) => println!("Effort level set to: {level}"),
+                    None => {
+                        eprintln!("Unknown effort level: {name}");
+                        eprintln!("Available: {}", EffortLevel::all_levels().iter().map(|l| l.as_str()).collect::<Vec<_>>().join(", "));
+                    }
+                }
+            }
+        }
         Ok(())
     }
 
@@ -7619,6 +7731,53 @@ fn format_status_report(
         format_sandbox_report(&context.sandbox_status),
     ]);
     blocks.join("\n\n")
+}
+
+fn render_hooks_report(
+    args: Option<&str>,
+    hooks: &runtime::RuntimeHookConfig,
+) -> String {
+    let format_section = |name: &str, cmds: &[String]| {
+        if cmds.is_empty() {
+            format!("  {name}: (none)")
+        } else {
+            let entries = cmds
+                .iter()
+                .enumerate()
+                .map(|(i, cmd)| format!("    [{i}] {cmd}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            format!("  {name}:\n{entries}")
+        }
+    };
+
+    match args {
+        Some(cmd) => {
+            format!("Hooks — running: {cmd}\n(manual hook execution not yet supported)")
+        }
+        None => {
+            let sections = [
+                format_section("PreToolUse", hooks.pre_tool_use()),
+                format_section("PostToolUse", hooks.post_tool_use()),
+                format_section("PostToolUseFailure", hooks.post_tool_use_failure()),
+                format_section("Notification", hooks.notification()),
+                format_section("Stop", hooks.stop()),
+            ];
+            format!("Lifecycle Hooks\n{}", sections.join("\n"))
+        }
+    }
+}
+
+fn render_hooks_json(hooks: &runtime::RuntimeHookConfig) -> serde_json::Value {
+    serde_json::json!({
+        "hooks": {
+            "PreToolUse": hooks.pre_tool_use(),
+            "PostToolUse": hooks.post_tool_use(),
+            "PostToolUseFailure": hooks.post_tool_use_failure(),
+            "Notification": hooks.notification(),
+            "Stop": hooks.stop(),
+        }
+    })
 }
 
 fn format_sandbox_report(status: &runtime::SandboxStatus) -> String {

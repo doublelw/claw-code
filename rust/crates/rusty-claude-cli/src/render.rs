@@ -44,6 +44,104 @@ impl Default for ColorTheme {
     }
 }
 
+impl ColorTheme {
+    pub fn dracula() -> Self {
+        Self {
+            heading: Color::Rgb { r: 189, g: 147, b: 249 },
+            emphasis: Color::Rgb { r: 255, g: 121, b: 198 },
+            strong: Color::Rgb { r: 255, g: 184, b: 108 },
+            inline_code: Color::Rgb { r: 80, g: 250, b: 123 },
+            link: Color::Rgb { r: 98, g: 114, b: 164 },
+            quote: Color::Rgb { r: 98, g: 114, b: 164 },
+            table_border: Color::Rgb { r: 68, g: 71, b: 90 },
+            code_block_border: Color::Rgb { r: 68, g: 71, b: 90 },
+            spinner_active: Color::Rgb { r: 189, g: 147, b: 249 },
+            spinner_done: Color::Rgb { r: 80, g: 250, b: 123 },
+            spinner_failed: Color::Rgb { r: 255, g: 85, b: 85 },
+        }
+    }
+
+    pub fn monokai() -> Self {
+        Self {
+            heading: Color::Rgb { r: 102, g: 217, b: 239 },
+            emphasis: Color::Rgb { r: 249, g: 38, b: 114 },
+            strong: Color::Rgb { r: 230, g: 219, b: 116 },
+            inline_code: Color::Rgb { r: 166, g: 226, b: 46 },
+            link: Color::Rgb { r: 174, g: 129, b: 255 },
+            quote: Color::Rgb { r: 117, g: 113, b: 94 },
+            table_border: Color::Rgb { r: 117, g: 113, b: 94 },
+            code_block_border: Color::Rgb { r: 57, g: 53, b: 39 },
+            spinner_active: Color::Rgb { r: 102, g: 217, b: 239 },
+            spinner_done: Color::Rgb { r: 166, g: 226, b: 46 },
+            spinner_failed: Color::Rgb { r: 249, g: 38, b: 114 },
+        }
+    }
+
+    pub fn solarized_dark() -> Self {
+        Self {
+            heading: Color::Rgb { r: 42, g: 161, b: 152 },
+            emphasis: Color::Rgb { r: 211, g: 54, b: 130 },
+            strong: Color::Rgb { r: 181, g: 137, b: 0 },
+            inline_code: Color::Rgb { r: 133, g: 153, b: 0 },
+            link: Color::Rgb { r: 38, g: 139, b: 210 },
+            quote: Color::Rgb { r: 88, g: 110, b: 117 },
+            table_border: Color::Rgb { r: 88, g: 110, b: 117 },
+            code_block_border: Color::Rgb { r: 7, g: 54, b: 66 },
+            spinner_active: Color::Rgb { r: 38, g: 139, b: 210 },
+            spinner_done: Color::Rgb { r: 133, g: 153, b: 0 },
+            spinner_failed: Color::Rgb { r: 220, g: 50, b: 47 },
+        }
+    }
+
+    pub fn gruvbox() -> Self {
+        Self {
+            heading: Color::Rgb { r: 142, g: 192, b: 124 },
+            emphasis: Color::Rgb { r: 211, g: 134, b: 155 },
+            strong: Color::Rgb { r: 250, g: 189, b: 47 },
+            inline_code: Color::Rgb { r: 184, g: 187, b: 38 },
+            link: Color::Rgb { r: 69, g: 133, b: 136 },
+            quote: Color::Rgb { r: 124, g: 111, b: 100 },
+            table_border: Color::Rgb { r: 80, g: 73, b: 69 },
+            code_block_border: Color::Rgb { r: 60, g: 56, b: 54 },
+            spinner_active: Color::Rgb { r: 104, g: 157, b: 106 },
+            spinner_done: Color::Rgb { r: 184, g: 187, b: 38 },
+            spinner_failed: Color::Rgb { r: 204, g: 36, b: 29 },
+        }
+    }
+
+    pub fn catppuccin() -> Self {
+        Self {
+            heading: Color::Rgb { r: 137, g: 180, b: 250 },
+            emphasis: Color::Rgb { r: 245, g: 194, b: 231 },
+            strong: Color::Rgb { r: 249, g: 226, b: 175 },
+            inline_code: Color::Rgb { r: 166, g: 227, b: 161 },
+            link: Color::Rgb { r: 116, g: 199, b: 236 },
+            quote: Color::Rgb { r: 88, g: 91, b: 112 },
+            table_border: Color::Rgb { r: 88, g: 91, b: 112 },
+            code_block_border: Color::Rgb { r: 49, g: 50, b: 68 },
+            spinner_active: Color::Rgb { r: 137, g: 180, b: 250 },
+            spinner_done: Color::Rgb { r: 166, g: 227, b: 161 },
+            spinner_failed: Color::Rgb { r: 243, g: 139, b: 168 },
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "default" => Some(Self::default()),
+            "dracula" => Some(Self::dracula()),
+            "monokai" => Some(Self::monokai()),
+            "solarized-dark" | "solarized" => Some(Self::solarized_dark()),
+            "gruvbox" => Some(Self::gruvbox()),
+            "catppuccin" | "catppuccin-mocha" => Some(Self::catppuccin()),
+            _ => None,
+        }
+    }
+
+    pub fn available_themes() -> &'static [&'static str] {
+        &["default", "dracula", "monokai", "solarized-dark", "gruvbox", "catppuccin"]
+    }
+}
+
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Spinner {
     frame_index: usize,

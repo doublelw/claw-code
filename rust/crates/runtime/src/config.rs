@@ -81,6 +81,12 @@ pub struct RuntimeFeatureConfig {
     provider_fallbacks: ProviderFallbackConfig,
     trusted_roots: Vec<String>,
     disable_workflows: bool,
+    fallback_model: Option<String>,
+    worktree_base_ref: Option<String>,
+    allow_all_claude_ai_mcps: bool,
+    lean_system_prompt_default: bool,
+    plugin_suggestion_marketplaces: Vec<String>,
+    disallowed_tools: Vec<String>,
 }
 
 /// Ordered chain of fallback model identifiers used when the primary
@@ -103,6 +109,8 @@ pub struct RuntimeHookConfig {
     teammate_idle: Vec<String>,
     task_created: Vec<String>,
     task_completed: Vec<String>,
+    message_display: Vec<String>,
+    session_start: Vec<String>,
 }
 
 /// Raw permission rule lists grouped by allow, deny, and ask behavior.
@@ -344,7 +352,23 @@ impl ConfigLoader {
             sandbox: parse_optional_sandbox_config(&merged_value)?,
             provider_fallbacks: parse_optional_provider_fallbacks(&merged_value)?,
             trusted_roots: parse_optional_trusted_roots(&merged_value)?,
-            disable_workflows: parse_optional_bool(&merged_value, "disableWorkflows").unwrap_or(false),
+            disable_workflows: parse_optional_bool(&merged_value, "disableWorkflows")
+                .unwrap_or(false),
+            fallback_model: parse_optional_string_field(&merged_value, "fallbackModel"),
+            worktree_base_ref: parse_optional_worktree_base_ref(&merged_value),
+            allow_all_claude_ai_mcps: parse_optional_bool(&merged_value, "allowAllClaudeAiMcps")
+                .unwrap_or(false),
+            lean_system_prompt_default: parse_optional_bool(
+                &merged_value,
+                "leanSystemPromptDefault",
+            )
+            .unwrap_or(true),
+            plugin_suggestion_marketplaces: parse_optional_string_vec(
+                &merged_value,
+                "pluginSuggestionMarketplaces",
+            )
+            .unwrap_or_default(),
+            disallowed_tools: parse_optional_disallowed_tools(&merged_value),
         };
 
         Ok(RuntimeConfig {
@@ -402,7 +426,23 @@ impl ConfigLoader {
             sandbox: parse_optional_sandbox_config(&merged_value)?,
             provider_fallbacks: parse_optional_provider_fallbacks(&merged_value)?,
             trusted_roots: parse_optional_trusted_roots(&merged_value)?,
-            disable_workflows: parse_optional_bool(&merged_value, "disableWorkflows").unwrap_or(false),
+            disable_workflows: parse_optional_bool(&merged_value, "disableWorkflows")
+                .unwrap_or(false),
+            fallback_model: parse_optional_string_field(&merged_value, "fallbackModel"),
+            worktree_base_ref: parse_optional_worktree_base_ref(&merged_value),
+            allow_all_claude_ai_mcps: parse_optional_bool(&merged_value, "allowAllClaudeAiMcps")
+                .unwrap_or(false),
+            lean_system_prompt_default: parse_optional_bool(
+                &merged_value,
+                "leanSystemPromptDefault",
+            )
+            .unwrap_or(true),
+            plugin_suggestion_marketplaces: parse_optional_string_vec(
+                &merged_value,
+                "pluginSuggestionMarketplaces",
+            )
+            .unwrap_or_default(),
+            disallowed_tools: parse_optional_disallowed_tools(&merged_value),
         };
 
         let config = RuntimeConfig {
@@ -504,6 +544,36 @@ impl RuntimeConfig {
         &self.feature_config.trusted_roots
     }
 
+    #[must_use]
+    pub fn fallback_model(&self) -> Option<&str> {
+        self.feature_config.fallback_model()
+    }
+
+    #[must_use]
+    pub fn worktree_base_ref(&self) -> Option<&str> {
+        self.feature_config.worktree_base_ref()
+    }
+
+    #[must_use]
+    pub fn allow_all_claude_ai_mcps(&self) -> bool {
+        self.feature_config.allow_all_claude_ai_mcps()
+    }
+
+    #[must_use]
+    pub fn lean_system_prompt_default(&self) -> bool {
+        self.feature_config.lean_system_prompt_default()
+    }
+
+    #[must_use]
+    pub fn plugin_suggestion_marketplaces(&self) -> &[String] {
+        self.feature_config.plugin_suggestion_marketplaces()
+    }
+
+    #[must_use]
+    pub fn disallowed_tools(&self) -> &[String] {
+        self.feature_config.disallowed_tools()
+    }
+
     /// Merge config-level default trusted roots with per-call roots.
     ///
     /// Config roots are defaults and are kept first; per-call roots extend the
@@ -587,6 +657,36 @@ impl RuntimeFeatureConfig {
     #[must_use]
     pub fn disable_workflows(&self) -> bool {
         self.disable_workflows
+    }
+
+    #[must_use]
+    pub fn fallback_model(&self) -> Option<&str> {
+        self.fallback_model.as_deref()
+    }
+
+    #[must_use]
+    pub fn worktree_base_ref(&self) -> Option<&str> {
+        self.worktree_base_ref.as_deref()
+    }
+
+    #[must_use]
+    pub fn allow_all_claude_ai_mcps(&self) -> bool {
+        self.allow_all_claude_ai_mcps
+    }
+
+    #[must_use]
+    pub fn lean_system_prompt_default(&self) -> bool {
+        self.lean_system_prompt_default
+    }
+
+    #[must_use]
+    pub fn plugin_suggestion_marketplaces(&self) -> &[String] {
+        &self.plugin_suggestion_marketplaces
+    }
+
+    #[must_use]
+    pub fn disallowed_tools(&self) -> &[String] {
+        &self.disallowed_tools
     }
 
     /// Merge this config's default trusted roots with per-call roots.
@@ -799,6 +899,8 @@ impl RuntimeHookConfig {
             teammate_idle: Vec::new(),
             task_created: Vec::new(),
             task_completed: Vec::new(),
+            message_display: Vec::new(),
+            session_start: Vec::new(),
         }
     }
 
@@ -828,6 +930,8 @@ impl RuntimeHookConfig {
         );
         extend_unique(&mut self.notification, other.notification());
         extend_unique(&mut self.stop, other.stop());
+        extend_unique(&mut self.message_display, other.message_display());
+        extend_unique(&mut self.session_start, other.session_start());
     }
 
     #[must_use]
@@ -887,6 +991,28 @@ impl RuntimeHookConfig {
     #[must_use]
     pub fn with_task_completed(mut self, commands: Vec<String>) -> Self {
         self.task_completed = commands;
+        self
+    }
+
+    #[must_use]
+    pub fn message_display(&self) -> &[String] {
+        &self.message_display
+    }
+
+    #[must_use]
+    pub fn session_start(&self) -> &[String] {
+        &self.session_start
+    }
+
+    #[must_use]
+    pub fn with_message_display(mut self, commands: Vec<String>) -> Self {
+        self.message_display = commands;
+        self
+    }
+
+    #[must_use]
+    pub fn with_session_start(mut self, commands: Vec<String>) -> Self {
+        self.session_start = commands;
         self
     }
 }
@@ -1074,6 +1200,9 @@ fn parse_optional_hooks_config_object(
         teammate_idle: optional_string_array(hooks, "TeammateIdle", context)?.unwrap_or_default(),
         task_created: optional_string_array(hooks, "TaskCreated", context)?.unwrap_or_default(),
         task_completed: optional_string_array(hooks, "TaskCompleted", context)?.unwrap_or_default(),
+        message_display: optional_string_array(hooks, "MessageDisplay", context)?
+            .unwrap_or_default(),
+        session_start: optional_string_array(hooks, "SessionStart", context)?.unwrap_or_default(),
     })
 }
 
@@ -1225,6 +1354,50 @@ fn parse_optional_trusted_roots(root: &JsonValue) -> Result<Vec<String>, ConfigE
         optional_string_array(object, "trustedRoots", "merged settings.trustedRoots")?
             .unwrap_or_default(),
     )
+}
+
+fn parse_optional_string_field(root: &JsonValue, key: &str) -> Option<String> {
+    root.as_object()
+        .and_then(|object| object.get(key))
+        .and_then(JsonValue::as_str)
+        .map(ToOwned::to_owned)
+}
+
+fn parse_optional_worktree_base_ref(root: &JsonValue) -> Option<String> {
+    root.as_object()
+        .and_then(|object| object.get("worktree"))
+        .and_then(JsonValue::as_object)
+        .and_then(|worktree| worktree.get("baseRef"))
+        .and_then(JsonValue::as_str)
+        .map(ToOwned::to_owned)
+}
+
+fn parse_optional_string_vec(root: &JsonValue, key: &str) -> Option<Vec<String>> {
+    let object = root.as_object()?;
+    let array = object.get(key)?.as_array()?;
+    Some(
+        array
+            .iter()
+            .filter_map(JsonValue::as_str)
+            .map(ToOwned::to_owned)
+            .collect(),
+    )
+}
+
+fn parse_optional_disallowed_tools(root: &JsonValue) -> Vec<String> {
+    root.as_object()
+        .and_then(|object| object.get("permissions"))
+        .and_then(JsonValue::as_object)
+        .and_then(|permissions| permissions.get("disallowedTools"))
+        .and_then(JsonValue::as_array)
+        .map(|array| {
+            array
+                .iter()
+                .filter_map(JsonValue::as_str)
+                .map(ToOwned::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn parse_filesystem_mode_label(value: &str) -> Result<FilesystemIsolationMode, ConfigError> {
@@ -2489,7 +2662,10 @@ mod tests {
     fn parses_notification_hooks_from_json() {
         let mut hooks_map = BTreeMap::new();
         let mut inner = BTreeMap::new();
-        inner.insert("Notification".to_string(), JsonValue::Array(vec![JsonValue::String("echo 'notified'".to_string())]));
+        inner.insert(
+            "Notification".to_string(),
+            JsonValue::Array(vec![JsonValue::String("echo 'notified'".to_string())]),
+        );
         hooks_map.insert("hooks".to_string(), JsonValue::Object(inner));
         let root = JsonValue::Object(hooks_map);
         let hooks = super::parse_optional_hooks_config(&root).expect("parse hooks");
@@ -2502,7 +2678,10 @@ mod tests {
     fn parses_stop_hooks_from_json() {
         let mut hooks_map = BTreeMap::new();
         let mut inner = BTreeMap::new();
-        inner.insert("Stop".to_string(), JsonValue::Array(vec![JsonValue::String("echo 'stopped'".to_string())]));
+        inner.insert(
+            "Stop".to_string(),
+            JsonValue::Array(vec![JsonValue::String("echo 'stopped'".to_string())]),
+        );
         hooks_map.insert("hooks".to_string(), JsonValue::Object(inner));
         let root = JsonValue::Object(hooks_map);
         let hooks = super::parse_optional_hooks_config(&root).expect("parse hooks");
@@ -2514,11 +2693,26 @@ mod tests {
     fn parses_all_five_hook_types_from_json() {
         let mut hooks_map = BTreeMap::new();
         let mut inner = BTreeMap::new();
-        inner.insert("PreToolUse".to_string(), JsonValue::Array(vec![JsonValue::String("pre.sh".to_string())]));
-        inner.insert("PostToolUse".to_string(), JsonValue::Array(vec![JsonValue::String("post.sh".to_string())]));
-        inner.insert("PostToolUseFailure".to_string(), JsonValue::Array(vec![JsonValue::String("fail.sh".to_string())]));
-        inner.insert("Notification".to_string(), JsonValue::Array(vec![JsonValue::String("notify.sh".to_string())]));
-        inner.insert("Stop".to_string(), JsonValue::Array(vec![JsonValue::String("stop.sh".to_string())]));
+        inner.insert(
+            "PreToolUse".to_string(),
+            JsonValue::Array(vec![JsonValue::String("pre.sh".to_string())]),
+        );
+        inner.insert(
+            "PostToolUse".to_string(),
+            JsonValue::Array(vec![JsonValue::String("post.sh".to_string())]),
+        );
+        inner.insert(
+            "PostToolUseFailure".to_string(),
+            JsonValue::Array(vec![JsonValue::String("fail.sh".to_string())]),
+        );
+        inner.insert(
+            "Notification".to_string(),
+            JsonValue::Array(vec![JsonValue::String("notify.sh".to_string())]),
+        );
+        inner.insert(
+            "Stop".to_string(),
+            JsonValue::Array(vec![JsonValue::String("stop.sh".to_string())]),
+        );
         hooks_map.insert("hooks".to_string(), JsonValue::Object(inner));
         let root = JsonValue::Object(hooks_map);
         let hooks = super::parse_optional_hooks_config(&root).expect("parse hooks");
@@ -2533,7 +2727,10 @@ mod tests {
     fn defaults_notification_and_stop_to_empty_when_absent() {
         let mut hooks_map = BTreeMap::new();
         let mut inner = BTreeMap::new();
-        inner.insert("PreToolUse".to_string(), JsonValue::Array(vec![JsonValue::String("pre.sh".to_string())]));
+        inner.insert(
+            "PreToolUse".to_string(),
+            JsonValue::Array(vec![JsonValue::String("pre.sh".to_string())]),
+        );
         hooks_map.insert("hooks".to_string(), JsonValue::Object(inner));
         let root = JsonValue::Object(hooks_map);
         let hooks = super::parse_optional_hooks_config(&root).expect("parse hooks");
@@ -2555,5 +2752,206 @@ mod tests {
         assert_eq!(config.pre_tool_use(), &["pre".to_string()]);
         assert_eq!(config.notification(), &["notify".to_string()]);
         assert_eq!(config.stop(), &["stop".to_string()]);
+    }
+
+    #[test]
+    fn parses_message_display_and_session_start_hooks() {
+        let mut hooks_map = BTreeMap::new();
+        let mut inner = BTreeMap::new();
+        inner.insert(
+            "MessageDisplay".to_string(),
+            JsonValue::Array(vec![JsonValue::String("echo 'display'".to_string())]),
+        );
+        inner.insert(
+            "SessionStart".to_string(),
+            JsonValue::Array(vec![JsonValue::String("echo 'start'".to_string())]),
+        );
+        hooks_map.insert("hooks".to_string(), JsonValue::Object(inner));
+        let root = JsonValue::Object(hooks_map);
+        let hooks = super::parse_optional_hooks_config(&root).expect("parse hooks");
+        assert_eq!(hooks.message_display(), &["echo 'display'".to_string()]);
+        assert_eq!(hooks.session_start(), &["echo 'start'".to_string()]);
+        assert!(hooks.pre_tool_use().is_empty());
+    }
+
+    #[test]
+    fn parses_fallback_model_from_settings() {
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let home = root.join("home").join(".claw");
+        fs::create_dir_all(&home).expect("home config dir");
+        fs::create_dir_all(&cwd).expect("project dir");
+        fs::write(
+            home.join("settings.json"),
+            r#"{"fallbackModel":"claude-haiku-4-5-20251213"}"#,
+        )
+        .expect("write settings");
+
+        let loaded = ConfigLoader::new(&cwd, &home)
+            .load()
+            .expect("config should load");
+
+        assert_eq!(loaded.fallback_model(), Some("claude-haiku-4-5-20251213"));
+        assert_eq!(
+            loaded.feature_config().fallback_model(),
+            Some("claude-haiku-4-5-20251213")
+        );
+
+        fs::remove_dir_all(root).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn parses_worktree_base_ref_from_settings() {
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let home = root.join("home").join(".claw");
+        fs::create_dir_all(&home).expect("home config dir");
+        fs::create_dir_all(&cwd).expect("project dir");
+        fs::write(
+            home.join("settings.json"),
+            r#"{"worktree":{"baseRef":"fresh"}}"#,
+        )
+        .expect("write settings");
+
+        let loaded = ConfigLoader::new(&cwd, &home)
+            .load()
+            .expect("config should load");
+
+        assert_eq!(loaded.worktree_base_ref(), Some("fresh"));
+
+        fs::remove_dir_all(root).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn parses_allow_all_claude_ai_mcps_from_settings() {
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let home = root.join("home").join(".claw");
+        fs::create_dir_all(&home).expect("home config dir");
+        fs::create_dir_all(&cwd).expect("project dir");
+        fs::write(
+            home.join("settings.json"),
+            r#"{"allowAllClaudeAiMcps":true}"#,
+        )
+        .expect("write settings");
+
+        let loaded = ConfigLoader::new(&cwd, &home)
+            .load()
+            .expect("config should load");
+
+        assert!(loaded.allow_all_claude_ai_mcps());
+
+        fs::remove_dir_all(root).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn parses_lean_system_prompt_default_from_settings() {
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let home = root.join("home").join(".claw");
+        fs::create_dir_all(&home).expect("home config dir");
+        fs::create_dir_all(&cwd).expect("project dir");
+        fs::write(
+            home.join("settings.json"),
+            r#"{"leanSystemPromptDefault":false}"#,
+        )
+        .expect("write settings");
+
+        let loaded = ConfigLoader::new(&cwd, &home)
+            .load()
+            .expect("config should load");
+
+        assert!(!loaded.lean_system_prompt_default());
+
+        fs::remove_dir_all(root).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn lean_system_prompt_defaults_to_true_when_absent() {
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let home = root.join("home").join(".claw");
+        fs::create_dir_all(&home).expect("home config dir");
+        fs::create_dir_all(&cwd).expect("project dir");
+        fs::write(home.join("settings.json"), "{}").expect("write settings");
+
+        let loaded = ConfigLoader::new(&cwd, &home)
+            .load()
+            .expect("config should load");
+
+        assert!(loaded.lean_system_prompt_default());
+
+        fs::remove_dir_all(root).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn parses_plugin_suggestion_marketplaces_from_settings() {
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let home = root.join("home").join(".claw");
+        fs::create_dir_all(&home).expect("home config dir");
+        fs::create_dir_all(&cwd).expect("project dir");
+        fs::write(
+            home.join("settings.json"),
+            r#"{"pluginSuggestionMarketplaces":["https://registry.example.com","https://alt.example.com"]}"#,
+        )
+        .expect("write settings");
+
+        let loaded = ConfigLoader::new(&cwd, &home)
+            .load()
+            .expect("config should load");
+
+        assert_eq!(
+            loaded.plugin_suggestion_marketplaces(),
+            &[
+                "https://registry.example.com".to_string(),
+                "https://alt.example.com".to_string()
+            ]
+        );
+
+        fs::remove_dir_all(root).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn parses_disallowed_tools_from_settings() {
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let home = root.join("home").join(".claw");
+        fs::create_dir_all(&home).expect("home config dir");
+        fs::create_dir_all(&cwd).expect("project dir");
+        fs::write(
+            home.join("settings.json"),
+            r#"{"permissions":{"disallowedTools":["Bash","Write"]}}"#,
+        )
+        .expect("write settings");
+
+        let loaded = ConfigLoader::new(&cwd, &home)
+            .load()
+            .expect("config should load");
+
+        assert_eq!(
+            loaded.disallowed_tools(),
+            &["Bash".to_string(), "Write".to_string()]
+        );
+
+        fs::remove_dir_all(root).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn disallowed_tools_defaults_to_empty_when_absent() {
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let home = root.join("home").join(".claw");
+        fs::create_dir_all(&home).expect("home config dir");
+        fs::create_dir_all(&cwd).expect("project dir");
+        fs::write(home.join("settings.json"), "{}").expect("write settings");
+
+        let loaded = ConfigLoader::new(&cwd, &home)
+            .load()
+            .expect("config should load");
+
+        assert!(loaded.disallowed_tools().is_empty());
+
+        fs::remove_dir_all(root).expect("cleanup temp dir");
     }
 }

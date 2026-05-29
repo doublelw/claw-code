@@ -28,6 +28,8 @@ pub enum HookEvent {
     TeammateIdle,
     TaskCreated,
     TaskCompleted,
+    MessageDisplay,
+    SessionStart,
 }
 
 impl HookEvent {
@@ -42,6 +44,8 @@ impl HookEvent {
             Self::TeammateIdle => "TeammateIdle",
             Self::TaskCreated => "TaskCreated",
             Self::TaskCompleted => "TaskCompleted",
+            Self::MessageDisplay => "MessageDisplay",
+            Self::SessionStart => "SessionStart",
         }
     }
 }
@@ -67,6 +71,13 @@ pub enum HookProgressEvent {
 
 pub trait HookProgressReporter {
     fn on_event(&mut self, event: &HookProgressEvent);
+}
+
+/// Output produced by [`HookRunner::run_session_start`].
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SessionStartOutput {
+    pub reload_skills: bool,
+    pub session_title: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -397,6 +408,65 @@ impl HookRunner {
             None,
             None,
         )
+    }
+
+    /// Run message display hooks. Fired before a message is shown to the user.
+    /// Returns `None` to hide the message, or `Some(transformed)` to display the
+    /// (possibly modified) message.
+    #[must_use]
+    pub fn run_message_display(&self, message: &str) -> Option<String> {
+        let result = Self::run_commands(
+            HookEvent::MessageDisplay,
+            self.config.message_display(),
+            "message_display",
+            message,
+            None,
+            false,
+            None,
+            None,
+        );
+
+        if result.is_denied() {
+            None
+        } else if let Some(updated) = result.updated_input() {
+            Some(updated.to_string())
+        } else {
+            Some(message.to_string())
+        }
+    }
+
+    /// Run session start hooks. Fired when a new session begins.
+    /// Returns structured output including whether skills should be reloaded
+    /// and an optional session title.
+    #[must_use]
+    pub fn run_session_start(&self, session_id: &str) -> SessionStartOutput {
+        let result = Self::run_commands(
+            HookEvent::SessionStart,
+            self.config.session_start(),
+            "session_start",
+            session_id,
+            None,
+            false,
+            None,
+            None,
+        );
+
+        let mut output = SessionStartOutput::default();
+
+        if let Some(updated) = result.updated_input() {
+            if let Ok(parsed) = serde_json::from_str::<Value>(updated) {
+                output.reload_skills = parsed
+                    .get("reloadSkills")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                output.session_title = parsed
+                    .get("sessionTitle")
+                    .and_then(Value::as_str)
+                    .map(String::from);
+            }
+        }
+
+        output
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1260,6 +1330,91 @@ mod tests {
 
         let result = runner.run_stop("test_context");
         assert!(result.messages().iter().any(|m| m == "Stop"));
+    }
+
+    // --- MessageDisplay hook tests ---
+
+    #[test]
+    fn message_display_event_stringifies_correctly() {
+        assert_eq!(HookEvent::MessageDisplay.as_str(), "MessageDisplay");
+    }
+
+    #[test]
+    fn run_message_display_returns_original_message_when_no_hooks() {
+        let runner = HookRunner::new(RuntimeHookConfig::default());
+        let result = runner.run_message_display("Hello, world!");
+        assert_eq!(result, Some("Hello, world!".to_string()));
+    }
+
+    #[test]
+    fn run_message_display_returns_original_message_when_hook_succeeds() {
+        let runner = HookRunner::new(
+            RuntimeHookConfig::new(Vec::new(), Vec::new(), Vec::new())
+                .with_message_display(vec![shell_snippet("printf 'ok'")]),
+        );
+        let result = runner.run_message_display("test message");
+        assert_eq!(result, Some("test message".to_string()));
+    }
+
+    #[test]
+    fn run_message_display_returns_none_when_hook_denies() {
+        let runner = HookRunner::new(
+            RuntimeHookConfig::new(Vec::new(), Vec::new(), Vec::new())
+                .with_message_display(vec![shell_snippet("printf 'hidden'; exit 2")]),
+        );
+        let result = runner.run_message_display("should be hidden");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn run_message_display_returns_transformed_message() {
+        let runner = HookRunner::new(
+            RuntimeHookConfig::new(Vec::new(), Vec::new(), Vec::new())
+                .with_message_display(vec![shell_snippet(
+                    r#"printf '%s' '{"hookSpecificOutput":{"updatedInput":{"text":"transformed"}}}'"#,
+                )]),
+        );
+        let result = runner.run_message_display("original");
+        assert_eq!(result, Some(r#"{"text":"transformed"}"#.to_string()));
+    }
+
+    // --- SessionStart hook tests ---
+
+    #[test]
+    fn session_start_event_stringifies_correctly() {
+        assert_eq!(HookEvent::SessionStart.as_str(), "SessionStart");
+    }
+
+    #[test]
+    fn run_session_start_returns_defaults_when_no_hooks() {
+        let runner = HookRunner::new(RuntimeHookConfig::default());
+        let output = runner.run_session_start("session-123");
+        assert!(!output.reload_skills);
+        assert_eq!(output.session_title, None);
+    }
+
+    #[test]
+    fn run_session_start_returns_defaults_when_hook_succeeds_without_output() {
+        let runner = HookRunner::new(
+            RuntimeHookConfig::new(Vec::new(), Vec::new(), Vec::new())
+                .with_session_start(vec![shell_snippet("printf 'ok'")]),
+        );
+        let output = runner.run_session_start("session-456");
+        assert!(!output.reload_skills);
+        assert_eq!(output.session_title, None);
+    }
+
+    #[test]
+    fn run_session_start_parses_reload_skills_and_session_title() {
+        let runner = HookRunner::new(
+            RuntimeHookConfig::new(Vec::new(), Vec::new(), Vec::new())
+                .with_session_start(vec![shell_snippet(
+                    r#"printf '%s' '{"hookSpecificOutput":{"updatedInput":{"reloadSkills":true,"sessionTitle":"My Session"}}}'"#,
+                )]),
+        );
+        let output = runner.run_session_start("session-789");
+        assert!(output.reload_skills);
+        assert_eq!(output.session_title, Some("My Session".to_string()));
     }
 
     #[cfg(windows)]

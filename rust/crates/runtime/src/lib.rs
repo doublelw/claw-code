@@ -11,9 +11,9 @@ mod bootstrap;
 pub mod branch_lock;
 mod compact;
 mod config;
-pub mod cron_scheduler;
 pub mod config_validate;
 mod conversation;
+pub mod cron_scheduler;
 pub mod effort;
 mod file_ops;
 pub mod g004_conformance;
@@ -31,8 +31,8 @@ pub mod mcp_server;
 mod mcp_stdio;
 pub mod mcp_tool_bridge;
 mod oauth;
-pub mod permission_enforcer;
 pub mod permission_classifier;
+pub mod permission_enforcer;
 mod permissions;
 pub mod plugin_lifecycle;
 mod policy_engine;
@@ -47,10 +47,10 @@ pub mod session_snapshot;
 pub mod trident;
 pub use session_control::SessionStore;
 mod sse;
-pub mod task_executor;
 pub mod stale_base;
 pub mod stale_branch;
 pub mod summary_compression;
+pub mod task_executor;
 pub mod task_packet;
 pub mod task_registry;
 pub mod team_cron_registry;
@@ -58,11 +58,11 @@ pub mod team_cron_registry;
 mod trust_resolver;
 mod usage;
 pub mod worker_boot;
-pub mod worktree;
 pub mod workflow_orchestrator;
 pub mod workflow_runtime;
 pub mod workflow_script;
 pub mod workflow_store;
+pub mod worktree;
 
 pub use approval_tokens::{
     ApprovalDelegationHop, ApprovalScope, ApprovalTokenAudit, ApprovalTokenError,
@@ -75,7 +75,6 @@ pub use compact::{
     compact_session, estimate_session_tokens, format_compact_summary,
     get_compact_continuation_message, should_compact, CompactionConfig, CompactionResult,
 };
-pub use effort::EffortLevel;
 pub use config::{
     ConfigEntry, ConfigError, ConfigLoader, ConfigSource, McpConfigCollection,
     McpManagedProxyServerConfig, McpOAuthConfig, McpRemoteServerConfig, McpSdkServerConfig,
@@ -93,6 +92,7 @@ pub use conversation::{
     ConversationRuntime, PromptCacheEvent, RuntimeError, StaticToolExecutor, ToolError,
     ToolExecutor, TurnSummary,
 };
+pub use effort::EffortLevel;
 pub use file_ops::{
     edit_file, edit_file_in_workspace, glob_search, glob_search_in_workspace, grep_search,
     grep_search_in_workspace, read_file, read_file_in_workspace, write_file,

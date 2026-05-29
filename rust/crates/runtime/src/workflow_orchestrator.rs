@@ -154,12 +154,12 @@ impl WorkflowOrchestrator {
             .ok_or_else(|| OrchestratorError::NotFound(run_id.to_string()))?;
 
         match run.status {
-            WorkflowRunStatus::Completed | WorkflowRunStatus::Failed | WorkflowRunStatus::Cancelled => {
-                Err(OrchestratorError::InvalidState(format!(
-                    "cannot cancel run in {:?} state",
-                    run.status
-                )))
-            }
+            WorkflowRunStatus::Completed
+            | WorkflowRunStatus::Failed
+            | WorkflowRunStatus::Cancelled => Err(OrchestratorError::InvalidState(format!(
+                "cannot cancel run in {:?} state",
+                run.status
+            ))),
             _ => {
                 run.status = WorkflowRunStatus::Cancelled;
                 run.updated_at = now_millis();
@@ -290,7 +290,10 @@ mod tests {
         let id = orch.start("script", "test", &test_dir()).unwrap();
         orch.pause(&id).unwrap();
         orch.resume(&id).unwrap();
-        assert_eq!(orch.get_run(&id).unwrap().status, WorkflowRunStatus::Running);
+        assert_eq!(
+            orch.get_run(&id).unwrap().status,
+            WorkflowRunStatus::Running
+        );
     }
 
     #[test]
@@ -310,7 +313,10 @@ mod tests {
         let orch = WorkflowOrchestrator::new();
         let id = orch.start("script", "test", &test_dir()).unwrap();
         orch.cancel(&id).unwrap();
-        assert_eq!(orch.get_run(&id).unwrap().status, WorkflowRunStatus::Cancelled);
+        assert_eq!(
+            orch.get_run(&id).unwrap().status,
+            WorkflowRunStatus::Cancelled
+        );
     }
 
     #[test]

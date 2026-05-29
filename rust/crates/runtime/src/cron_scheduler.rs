@@ -3,10 +3,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CronSchedule {
-    minute: Vec<u8>,   // 0-59
-    hour: Vec<u8>,     // 0-23
+    minute: Vec<u8>,       // 0-59
+    hour: Vec<u8>,         // 0-23
     day_of_month: Vec<u8>, // 1-31
-    month: Vec<u8>,    // 1-12
+    month: Vec<u8>,        // 1-12
     day_of_week: Vec<u8>,  // 0-6 (0=Sunday)
 }
 
@@ -84,7 +84,9 @@ fn parse_field(field: &str, min: u8, max: u8) -> Result<Vec<u8>, String> {
             while v <= max {
                 values.push(v);
                 v = v.saturating_add(step);
-                if step == 0 { break; }
+                if step == 0 {
+                    break;
+                }
             }
         } else {
             let v: u8 = part.parse().map_err(|_| part.to_string())?;
@@ -101,7 +103,10 @@ fn parse_field(field: &str, min: u8, max: u8) -> Result<Vec<u8>, String> {
 }
 
 pub fn next_fire_time(schedule: &CronSchedule, after: SystemTime) -> SystemTime {
-    let secs = after.duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let secs = after
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
     // Check every minute from after+60s
     let start_sec = (secs / 60 + 1) * 60;
     for offset in 0..525600 {
@@ -141,10 +146,13 @@ impl CronScheduler {
 
     pub fn add(&mut self, entry: CronEntry) {
         let next_fire = Some(next_fire_time(&entry.schedule, SystemTime::now()));
-        self.entries.insert(entry.id.clone(), ScheduledEntry {
-            config: entry,
-            next_fire,
-        });
+        self.entries.insert(
+            entry.id.clone(),
+            ScheduledEntry {
+                config: entry,
+                next_fire,
+            },
+        );
     }
 
     pub fn remove(&mut self, id: &str) -> bool {
@@ -192,7 +200,10 @@ mod tests {
     #[test]
     fn parse_step_expression() {
         let schedule = parse_cron_expression("*/5 * * * *").unwrap();
-        assert_eq!(schedule.minute, vec![0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55]);
+        assert_eq!(
+            schedule.minute,
+            vec![0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55]
+        );
     }
 
     #[test]
@@ -209,8 +220,14 @@ mod tests {
 
     #[test]
     fn reject_wrong_field_count() {
-        assert!(matches!(parse_cron_expression("* * *"), Err(CronParseError::InvalidFieldCount)));
-        assert!(matches!(parse_cron_expression("* * * * * *"), Err(CronParseError::InvalidFieldCount)));
+        assert!(matches!(
+            parse_cron_expression("* * *"),
+            Err(CronParseError::InvalidFieldCount)
+        ));
+        assert!(matches!(
+            parse_cron_expression("* * * * * *"),
+            Err(CronParseError::InvalidFieldCount)
+        ));
     }
 
     #[test]

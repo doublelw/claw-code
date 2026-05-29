@@ -1034,6 +1034,41 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: None,
         resume_supported: true,
     },
+    SlashCommandSpec {
+        name: "workflows",
+        aliases: &["workflow"],
+        summary: "Manage dynamic workflows (list|run|status|pause|resume|cancel|save|delete)",
+        argument_hint: Some("[list|status <id>|run <name>|pause <id>|resume <id>|cancel <id>|save <name>|delete <name>]"),
+        resume_supported: true,
+    },
+    SlashCommandSpec {
+        name: "code-review",
+        aliases: &["simplify"],
+        summary: "Run code review with optional --fix and --comment flags",
+        argument_hint: Some("[--fix] [--comment] [scope]"),
+        resume_supported: true,
+    },
+    SlashCommandSpec {
+        name: "reload-skills",
+        aliases: &[],
+        summary: "Re-scan skill directories without restarting",
+        argument_hint: None,
+        resume_supported: true,
+    },
+    SlashCommandSpec {
+        name: "goal",
+        aliases: &[],
+        summary: "Set a completion condition for Claude to work toward",
+        argument_hint: Some("<condition>"),
+        resume_supported: true,
+    },
+    SlashCommandSpec {
+        name: "deep-research",
+        aliases: &[],
+        summary: "Run deep research workflow on a topic",
+        argument_hint: Some("<topic>"),
+        resume_supported: true,
+    },
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1179,6 +1214,19 @@ pub enum SlashCommand {
     History {
         count: Option<String>,
     },
+    Workflows {
+        action: Option<String>,
+    },
+    CodeReview {
+        args: Option<String>,
+    },
+    ReloadSkills,
+    Goal {
+        condition: Option<String>,
+    },
+    DeepResearch {
+        topic: Option<String>,
+    },
     Unknown(String),
     Team {
         action: Option<String>,
@@ -1280,6 +1328,11 @@ impl SlashCommand {
             Self::Tag { .. } => "/tag",
             Self::OutputStyle { .. } => "/output-style",
             Self::AddDir { .. } => "/add-dir",
+            Self::Workflows { .. } => "/workflows",
+            Self::CodeReview { .. } => "/code-review",
+            Self::ReloadSkills => "/reload-skills",
+            Self::Goal { .. } => "/goal",
+            Self::DeepResearch { .. } => "/deep-research",
             Self::Team { .. } => "/team",
             Self::Sandbox => "/sandbox",
             Self::Mcp { .. } => "/mcp",
@@ -1495,6 +1548,16 @@ pub fn validate_slash_command_input(
         "history" => SlashCommand::History {
             count: optional_single_arg(command, &args, "[count]")?,
         },
+        "workflows" | "workflow" => SlashCommand::Workflows { action: remainder },
+        "code-review" | "simplify" => SlashCommand::CodeReview { args: remainder },
+        "reload-skills" => {
+            validate_no_args(command, &args)?;
+            SlashCommand::ReloadSkills
+        }
+        "goal" => SlashCommand::Goal {
+            condition: remainder,
+        },
+        "deep-research" => SlashCommand::DeepResearch { topic: remainder },
         other => SlashCommand::Unknown(other.to_string()),
     }))
 }
@@ -4624,6 +4687,11 @@ pub fn handle_slash_command(
         | SlashCommand::AddDir { .. }
         | SlashCommand::History { .. }
         | SlashCommand::Team { .. }
+        | SlashCommand::Workflows { .. }
+        | SlashCommand::CodeReview { .. }
+        | SlashCommand::ReloadSkills
+        | SlashCommand::Goal { .. }
+        | SlashCommand::DeepResearch { .. }
         | SlashCommand::Unknown(_) => None,
     }
 }
@@ -5226,7 +5294,7 @@ mod tests {
         assert!(help.contains("aliases: /skill"));
         assert!(!help.contains("/login"));
         assert!(!help.contains("/logout"));
-        assert_eq!(slash_command_specs().len(), 139);
+        assert_eq!(slash_command_specs().len(), 144);
         assert!(resume_supported_slash_commands().len() >= 39);
     }
 

@@ -45,7 +45,25 @@ impl EffortLevel {
 
     #[must_use]
     pub fn all_levels() -> &'static [EffortLevel] {
-        &[Self::Ultracode, Self::Xhigh, Self::High, Self::Medium, Self::Low]
+        &[
+            Self::Ultracode,
+            Self::Xhigh,
+            Self::High,
+            Self::Medium,
+            Self::Low,
+        ]
+    }
+
+    /// Returns the user-facing display label for this effort level.
+    #[must_use]
+    pub fn display_label(self) -> &'static str {
+        match self {
+            Self::Ultracode => "Faster",
+            Self::Xhigh => "Faster",
+            Self::High => "Faster",
+            Self::Medium => "Balanced",
+            Self::Low => "Smarter",
+        }
     }
 }
 
@@ -76,7 +94,10 @@ mod tests {
     #[test]
     fn parses_aliases() {
         assert_eq!(EffortLevel::from_str("XHIGH"), Some(EffortLevel::Xhigh));
-        assert_eq!(EffortLevel::from_str("extra_high"), Some(EffortLevel::Xhigh));
+        assert_eq!(
+            EffortLevel::from_str("extra_high"),
+            Some(EffortLevel::Xhigh)
+        );
         assert_eq!(EffortLevel::from_str("max"), Some(EffortLevel::Xhigh));
         assert_eq!(EffortLevel::from_str("med"), Some(EffortLevel::Medium));
         assert_eq!(EffortLevel::from_str("default"), Some(EffortLevel::Medium));
@@ -102,14 +123,19 @@ mod tests {
 
     #[test]
     fn parses_ultracode() {
-        assert_eq!(EffortLevel::from_str("ultracode"), Some(EffortLevel::Ultracode));
+        assert_eq!(
+            EffortLevel::from_str("ultracode"),
+            Some(EffortLevel::Ultracode)
+        );
         assert_eq!(EffortLevel::from_str("ultra"), Some(EffortLevel::Ultracode));
         assert_eq!(EffortLevel::from_str("ULTRA"), Some(EffortLevel::Ultracode));
     }
 
     #[test]
     fn ultracode_has_highest_budget() {
-        assert!(EffortLevel::Ultracode.api_budget_tokens() > EffortLevel::Xhigh.api_budget_tokens());
+        assert!(
+            EffortLevel::Ultracode.api_budget_tokens() > EffortLevel::Xhigh.api_budget_tokens()
+        );
         assert_eq!(EffortLevel::Ultracode.api_budget_tokens(), Some(64_000));
     }
 
@@ -135,5 +161,22 @@ mod tests {
             let parsed: EffortLevel = serde_json::from_str(&json).unwrap();
             assert_eq!(*level, parsed);
         }
+    }
+
+    #[test]
+    fn display_label_faster_for_high_effort_levels() {
+        assert_eq!(EffortLevel::Ultracode.display_label(), "Faster");
+        assert_eq!(EffortLevel::Xhigh.display_label(), "Faster");
+        assert_eq!(EffortLevel::High.display_label(), "Faster");
+    }
+
+    #[test]
+    fn display_label_smarter_for_low_effort() {
+        assert_eq!(EffortLevel::Low.display_label(), "Smarter");
+    }
+
+    #[test]
+    fn display_label_balanced_for_medium() {
+        assert_eq!(EffortLevel::Medium.display_label(), "Balanced");
     }
 }

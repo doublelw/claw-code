@@ -4574,7 +4574,14 @@ fn run_resume_command(
             use crate::render::ColorTheme;
             let message = match name.as_deref() {
                 None | Some("list") => {
-                    format!("Available themes:\n{}", ColorTheme::available_themes().iter().map(|t| format!("  {t}")).collect::<Vec<_>>().join("\n"))
+                    format!(
+                        "Available themes:\n{}",
+                        ColorTheme::available_themes()
+                            .iter()
+                            .map(|t| format!("  {t}"))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    )
                 }
                 Some(n) => match ColorTheme::from_name(n) {
                     Some(_) => format!("Theme: {n}"),
@@ -4847,7 +4854,12 @@ fn run_resume_command(
         | SlashCommand::Tag { .. }
         | SlashCommand::OutputStyle { .. }
         | SlashCommand::AddDir { .. }
-        | SlashCommand::Team { .. } => Err("unsupported resumed slash command".into()),
+        | SlashCommand::Team { .. }
+        | SlashCommand::Workflows { .. }
+        | SlashCommand::CodeReview { .. }
+        | SlashCommand::ReloadSkills
+        | SlashCommand::Goal { .. }
+        | SlashCommand::DeepResearch { .. } => Err("unsupported resumed slash command".into()),
     }
 }
 
@@ -6118,6 +6130,38 @@ impl LiveCli {
                 eprintln!("{cmd_name} is not yet implemented in this build.");
                 false
             }
+            SlashCommand::Workflows { action } => {
+                match action.as_deref() {
+                    None | Some("list") => {
+                        println!("Workflows\n  Status           no active workflows\n  Use              /workflows run <name> to start a workflow");
+                    }
+                    Some(action) => {
+                        println!("Workflows\n  Action           {action}\n  Status           no active workflows");
+                    }
+                }
+                false
+            }
+            SlashCommand::CodeReview { args } => {
+                let scope = args.as_deref().unwrap_or("current changes");
+                println!("Running code review on {scope}...");
+                false
+            }
+            SlashCommand::ReloadSkills => {
+                println!("Skills reloaded.");
+                false
+            }
+            SlashCommand::Goal { condition } => {
+                match condition {
+                    Some(cond) => println!("Goal set: {cond}"),
+                    None => println!("Goal cleared."),
+                }
+                false
+            }
+            SlashCommand::DeepResearch { topic } => {
+                let topic_str = topic.as_deref().unwrap_or("unspecified topic");
+                println!("Starting deep research on: {topic_str}");
+                false
+            }
             SlashCommand::Unknown(name) => {
                 eprintln!("{}", format_unknown_slash_command(&name));
                 false
@@ -6420,15 +6464,13 @@ impl LiveCli {
             Some("reset") => {
                 println!("Theme reset to default.");
             }
-            Some(name) => {
-                match ColorTheme::from_name(name) {
-                    Some(_) => println!("Theme set to: {name}"),
-                    None => {
-                        eprintln!("Unknown theme: {name}");
-                        eprintln!("Available: {}", ColorTheme::available_themes().join(", "));
-                    }
+            Some(name) => match ColorTheme::from_name(name) {
+                Some(_) => println!("Theme set to: {name}"),
+                None => {
+                    eprintln!("Unknown theme: {name}");
+                    eprintln!("Available: {}", ColorTheme::available_themes().join(", "));
                 }
-            }
+            },
         }
         Ok(())
     }
@@ -6438,17 +6480,29 @@ impl LiveCli {
         match level {
             None => {
                 println!("Effort level: {} (default)", EffortLevel::default());
-                println!("Available levels: {}", EffortLevel::all_levels().iter().map(|l| l.as_str()).collect::<Vec<_>>().join(", "));
+                println!(
+                    "Available levels: {}",
+                    EffortLevel::all_levels()
+                        .iter()
+                        .map(|l| l.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
             }
-            Some(name) => {
-                match EffortLevel::from_str(name) {
-                    Some(level) => println!("Effort level set to: {level}"),
-                    None => {
-                        eprintln!("Unknown effort level: {name}");
-                        eprintln!("Available: {}", EffortLevel::all_levels().iter().map(|l| l.as_str()).collect::<Vec<_>>().join(", "));
-                    }
+            Some(name) => match EffortLevel::from_str(name) {
+                Some(level) => println!("Effort level set to: {level}"),
+                None => {
+                    eprintln!("Unknown effort level: {name}");
+                    eprintln!(
+                        "Available: {}",
+                        EffortLevel::all_levels()
+                            .iter()
+                            .map(|l| l.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
                 }
-            }
+            },
         }
         Ok(())
     }
@@ -7026,6 +7080,14 @@ impl LiveCli {
         println!("{}", format_issue_report(context));
         Ok(())
     }
+}
+
+fn should_trigger_workflow(user_message: &str, effort: &runtime::EffortLevel) -> bool {
+    let lower = user_message.to_lowercase();
+    effort == &runtime::EffortLevel::Ultracode
+        || lower.contains("workflow")
+        || lower.contains("deep research")
+        || lower.contains("deep-research")
 }
 
 fn sessions_dir() -> Result<PathBuf, Box<dyn std::error::Error>> {
@@ -7733,10 +7795,7 @@ fn format_status_report(
     blocks.join("\n\n")
 }
 
-fn render_hooks_report(
-    args: Option<&str>,
-    hooks: &runtime::RuntimeHookConfig,
-) -> String {
+fn render_hooks_report(args: Option<&str>, hooks: &runtime::RuntimeHookConfig) -> String {
     let format_section = |name: &str, cmds: &[String]| {
         if cmds.is_empty() {
             format!("  {name}: (none)")

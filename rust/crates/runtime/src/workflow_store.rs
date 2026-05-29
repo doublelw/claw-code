@@ -50,13 +50,25 @@ impl WorkflowStore {
 
     pub fn load(&self, name: &str) -> Option<WorkflowEntry> {
         // Priority: project > user > builtin
-        if let Some(entry) = Self::load_from_path(self, &self.project_dir.join(format!("{name}.js")), name, WorkflowSource::Project) {
+        if let Some(entry) = Self::load_from_path(
+            self,
+            &self.project_dir.join(format!("{name}.js")),
+            name,
+            WorkflowSource::Project,
+        ) {
             return Some(entry);
         }
-        if let Some(entry) = Self::load_from_path(self, &self.user_dir.join(format!("{name}.js")), name, WorkflowSource::User) {
+        if let Some(entry) = Self::load_from_path(
+            self,
+            &self.user_dir.join(format!("{name}.js")),
+            name,
+            WorkflowSource::User,
+        ) {
             return Some(entry);
         }
-        Self::builtin_workflows().into_iter().find(|e| e.name == name)
+        Self::builtin_workflows()
+            .into_iter()
+            .find(|e| e.name == name)
     }
 
     pub fn save_to_project(
@@ -113,7 +125,12 @@ impl WorkflowStore {
         }
     }
 
-    fn load_from_path(_this: &Self, path: &Path, name: &str, source: WorkflowSource) -> Option<WorkflowEntry> {
+    fn load_from_path(
+        _this: &Self,
+        path: &Path,
+        name: &str,
+        source: WorkflowSource,
+    ) -> Option<WorkflowEntry> {
         let script = fs::read_to_string(path).ok()?;
         let description = Self::parse_description(&script);
         Some(WorkflowEntry {
@@ -156,7 +173,9 @@ impl WorkflowStore {
         vec![WorkflowEntry {
             name: "deep-research".to_string(),
             script: crate::workflow_script::WorkflowScript::deep_research_script(topic),
-            description: Some("Deep research workflow: multi-angle search, analysis, and synthesis".to_string()),
+            description: Some(
+                "Deep research workflow: multi-angle search, analysis, and synthesis".to_string(),
+            ),
             source: WorkflowSource::Builtin,
         }]
     }
@@ -173,7 +192,10 @@ mod tests {
 
     #[test]
     fn discover_empty_when_no_dirs() {
-        let store = WorkflowStore::new(Path::new("/nonexistent/project"), Path::new("/nonexistent/home"));
+        let store = WorkflowStore::new(
+            Path::new("/nonexistent/project"),
+            Path::new("/nonexistent/home"),
+        );
         let entries = store.discover();
         // Should have at least builtin deep-research
         assert!(entries.iter().any(|e| e.name == "deep-research"));
@@ -185,11 +207,17 @@ mod tests {
         let home_dir = temp_dir("home");
         let workflows_dir = project_dir.join(".claude").join("workflows");
         fs::create_dir_all(&workflows_dir).unwrap();
-        fs::write(workflows_dir.join("audit.js"), "// @description Audit code\nspawnAgent('a','b');").unwrap();
+        fs::write(
+            workflows_dir.join("audit.js"),
+            "// @description Audit code\nspawnAgent('a','b');",
+        )
+        .unwrap();
 
         let store = WorkflowStore::new(&project_dir, &home_dir);
         let entries = store.discover();
-        assert!(entries.iter().any(|e| e.name == "audit" && e.source == WorkflowSource::Project));
+        assert!(entries
+            .iter()
+            .any(|e| e.name == "audit" && e.source == WorkflowSource::Project));
     }
 
     #[test]
@@ -198,11 +226,17 @@ mod tests {
         let home_dir = temp_dir("home");
         let workflows_dir = home_dir.join("workflows");
         fs::create_dir_all(&workflows_dir).unwrap();
-        fs::write(workflows_dir.join("review.js"), "// @description Review\nspawnAgent('a','b');").unwrap();
+        fs::write(
+            workflows_dir.join("review.js"),
+            "// @description Review\nspawnAgent('a','b');",
+        )
+        .unwrap();
 
         let store = WorkflowStore::new(&project_dir, &home_dir);
         let entries = store.discover();
-        assert!(entries.iter().any(|e| e.name == "review" && e.source == WorkflowSource::User));
+        assert!(entries
+            .iter()
+            .any(|e| e.name == "review" && e.source == WorkflowSource::User));
     }
 
     #[test]
@@ -212,11 +246,19 @@ mod tests {
 
         let user_wf = home_dir.join("workflows");
         fs::create_dir_all(&user_wf).unwrap();
-        fs::write(user_wf.join("test.js"), "user version; spawnAgent('a','b');").unwrap();
+        fs::write(
+            user_wf.join("test.js"),
+            "user version; spawnAgent('a','b');",
+        )
+        .unwrap();
 
         let proj_wf = project_dir.join(".claude").join("workflows");
         fs::create_dir_all(&proj_wf).unwrap();
-        fs::write(proj_wf.join("test.js"), "project version; spawnAgent('a','b');").unwrap();
+        fs::write(
+            proj_wf.join("test.js"),
+            "project version; spawnAgent('a','b');",
+        )
+        .unwrap();
 
         let store = WorkflowStore::new(&project_dir, &home_dir);
         let entry = store.load("test").unwrap();
@@ -230,7 +272,9 @@ mod tests {
         let home_dir = temp_dir("home");
         let store = WorkflowStore::new(&project_dir, &home_dir);
 
-        let path = store.save_to_project("my-flow", "spawnAgent('a','b');", Some("My flow")).unwrap();
+        let path = store
+            .save_to_project("my-flow", "spawnAgent('a','b');", Some("My flow"))
+            .unwrap();
         assert!(path.exists());
         let content = fs::read_to_string(&path).unwrap();
         assert!(content.contains("@description My flow"));
@@ -249,9 +293,17 @@ mod tests {
         let project_dir = temp_dir("project");
         let home_dir = temp_dir("home");
         let store = WorkflowStore::new(&project_dir, &home_dir);
-        store.save_to_user("to-delete", "spawnAgent('a','b');", None).unwrap();
+        store
+            .save_to_user("to-delete", "spawnAgent('a','b');", None)
+            .unwrap();
         assert!(store.delete("to-delete", WorkflowSource::User).unwrap());
-        assert!(store.load("to-delete").is_none() || store.load("to-delete").map(|e| e.source != WorkflowSource::User).unwrap_or(true));
+        assert!(
+            store.load("to-delete").is_none()
+                || store
+                    .load("to-delete")
+                    .map(|e| e.source != WorkflowSource::User)
+                    .unwrap_or(true)
+        );
     }
 
     #[test]
@@ -274,6 +326,9 @@ mod tests {
 
         let store = WorkflowStore::new(&project_dir, &home_dir);
         let entry = store.load("doc").unwrap();
-        assert_eq!(entry.description, Some("My documented workflow".to_string()));
+        assert_eq!(
+            entry.description,
+            Some("My documented workflow".to_string())
+        );
     }
 }

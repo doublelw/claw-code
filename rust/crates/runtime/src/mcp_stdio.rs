@@ -1402,6 +1402,10 @@ pub fn spawn_mcp_stdio_process(bootstrap: &McpClientBootstrap) -> io::Result<Mcp
 }
 
 fn apply_env(command: &mut Command, env: &BTreeMap<String, String>) {
+    command.env("CLAUDECODE", "1");
+    if let Ok(session_id) = std::env::var("CLAUDE_CODE_SESSION_ID") {
+        command.env("CLAUDE_CODE_SESSION_ID", session_id);
+    }
     for (key, value) in env {
         command.env(key, value);
     }
@@ -2963,6 +2967,130 @@ mod tests {
                 other => panic!("expected unknown tool error, got {other:?}"),
             }
 
+            cleanup_script(&script_path);
+        });
+    }
+
+    #[test]
+    fn spawned_process_receives_claudenv_env_var() {
+        let runtime = Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        runtime.block_on(async {
+            let script_path = write_echo_script();
+            // Override the script to check for CLAUDECODE env var
+            let check_script = script_path
+                .parent()
+                .expect("parent")
+                .join("check-claudecode.sh");
+            fs::write(
+                &check_script,
+                "#!/bin/sh\nprintf 'CLAUDECODE=%s\\n' \"$CLAUDECODE\"\n",
+            )
+            .expect("write script");
+            let mut permissions = fs::metadata(&check_script).expect("metadata").permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&check_script, permissions).expect("chmod");
+
+            let transport = crate::mcp_client::McpStdioTransport {
+                command: "/bin/sh".to_string(),
+                args: vec![check_script.to_string_lossy().into_owned()],
+                env: BTreeMap::new(),
+                tool_call_timeout_ms: None,
+            };
+            let mut process = McpStdioProcess::spawn(&transport).expect("spawn process");
+            let output = process.read_available().await.expect("read output");
+            let output_str = String::from_utf8_lossy(&output);
+            assert!(
+                output_str.contains("CLAUDECODE=1"),
+                "expected CLAUDECODE=1 in output, got: {output_str}"
+            );
+
+            process.terminate().await.expect("terminate");
+            let _ = process.wait().await;
+            cleanup_script(&check_script);
+        });
+    }
+
+    #[test]
+    fn spawned_process_receives_session_id_when_set() {
+        let runtime = Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        runtime.block_on(async {
+            let script_path = write_echo_script();
+            let check_script = script_path
+                .parent()
+                .expect("parent")
+                .join("check-session.sh");
+            fs::write(
+                &check_script,
+                "#!/bin/sh\nprintf 'SESSION=%s\\n' \"$CLAUDE_CODE_SESSION_ID\"\n",
+            )
+            .expect("write script");
+            let mut permissions = fs::metadata(&check_script).expect("metadata").permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&check_script, permissions).expect("chmod");
+
+            // Temporarily set the env var
+            std::env::set_var("CLAUDE_CODE_SESSION_ID", "test-session-abc");
+
+            let transport = crate::mcp_client::McpStdioTransport {
+                command: "/bin/sh".to_string(),
+                args: vec![check_script.to_string_lossy().into_owned()],
+                env: BTreeMap::new(),
+                tool_call_timeout_ms: None,
+            };
+            let mut process = McpStdioProcess::spawn(&transport).expect("spawn process");
+            let output = process.read_available().await.expect("read output");
+            let output_str = String::from_utf8_lossy(&output);
+
+            // Clean up env var
+            std::env::remove_var("CLAUDE_CODE_SESSION_ID");
+
+            assert!(
+                output_str.contains("SESSION=test-session-abc"),
+                "expected SESSION=test-session-abc in output, got: {output_str}"
+            );
+
+            process.terminate().await.expect("terminate");
+            let _ = process.wait().await;
+            cleanup_script(&check_script);
+        });
+    }
+
+    #[test]
+    fn spawned_process_works_without_session_id() {
+        let runtime = Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        runtime.block_on(async {
+            let script_path = write_echo_script();
+            // Ensure CLAUDE_CODE_SESSION_ID is not set
+            std::env::remove_var("CLAUDE_CODE_SESSION_ID");
+
+            let transport = crate::mcp_client::McpStdioTransport {
+                command: "/bin/sh".to_string(),
+                args: vec![script_path.to_string_lossy().into_owned()],
+                env: BTreeMap::from([(
+                    "MCP_TEST_TOKEN".to_string(),
+                    "no-session-test".to_string(),
+                )]),
+                tool_call_timeout_ms: None,
+            };
+            let mut process = McpStdioProcess::spawn(&transport).expect("spawn process");
+            let output = process.read_available().await.expect("read output");
+            let output_str = String::from_utf8_lossy(&output);
+            assert!(
+                output_str.contains("READY:no-session-test"),
+                "expected normal operation without session id, got: {output_str}"
+            );
+
+            process.terminate().await.expect("terminate");
+            let _ = process.wait().await;
             cleanup_script(&script_path);
         });
     }

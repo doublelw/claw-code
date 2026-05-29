@@ -194,7 +194,9 @@ mod tests {
     fn output_truncated_at_max() {
         let mut executor = TaskExecutor::new();
         executor.max_output_bytes = 100;
-        executor.spawn("t6", "python3 -c \"print('x'*200)\"", None).unwrap();
+        executor
+            .spawn("t6", "python3 -c \"print('x'*200)\"", None)
+            .unwrap();
         let output = executor.output("t6").unwrap();
         assert!(output.len() <= 100);
     }

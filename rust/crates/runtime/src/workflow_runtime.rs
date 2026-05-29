@@ -70,7 +70,8 @@ struct SharedState {
     model: String,
 }
 
-static EXECUTION_REGISTRY: OnceLock<Mutex<BTreeMap<String, Arc<Mutex<SharedState>>>>> = OnceLock::new();
+static EXECUTION_REGISTRY: OnceLock<Mutex<BTreeMap<String, Arc<Mutex<SharedState>>>>> =
+    OnceLock::new();
 
 fn registry() -> &'static Mutex<BTreeMap<String, Arc<Mutex<SharedState>>>> {
     EXECUTION_REGISTRY.get_or_init(|| Mutex::new(BTreeMap::new()))
@@ -97,13 +98,22 @@ impl WorkflowRuntime {
         self
     }
 
-    pub fn execute(&self, config: WorkflowExecutionConfig) -> Result<WorkflowResult, WorkflowError> {
+    pub fn execute(
+        &self,
+        config: WorkflowExecutionConfig,
+    ) -> Result<WorkflowResult, WorkflowError> {
         let shared = Arc::new(Mutex::new(SharedState {
             max_total_agents: self.max_total_agents,
             env_vars: config.env_vars.clone(),
             api_key: config.api_key.clone(),
-            api_base_url: config.api_base_url.clone().unwrap_or_else(|| "https://open.bigmodel.cn/api/coding/paas/v4".to_string()),
-            model: config.model.clone().unwrap_or_else(|| "GLM-4.7".to_string()),
+            api_base_url: config
+                .api_base_url
+                .clone()
+                .unwrap_or_else(|| "https://open.bigmodel.cn/api/coding/paas/v4".to_string()),
+            model: config
+                .model
+                .clone()
+                .unwrap_or_else(|| "GLM-4.7".to_string()),
             ..Default::default()
         }));
 
@@ -120,19 +130,35 @@ impl WorkflowRuntime {
 
         // Use fn pointers (no closures, no unsafe)
         context
-            .register_global_callable(JsString::from("log"), 1, NativeFunction::from_fn_ptr(js_log))
+            .register_global_callable(
+                JsString::from("log"),
+                1,
+                NativeFunction::from_fn_ptr(js_log),
+            )
             .map_err(|e| WorkflowError::ScriptExecution(e.to_string()))?;
 
         context
-            .register_global_callable(JsString::from("spawnAgent"), 2, NativeFunction::from_fn_ptr(js_spawn_agent))
+            .register_global_callable(
+                JsString::from("spawnAgent"),
+                2,
+                NativeFunction::from_fn_ptr(js_spawn_agent),
+            )
             .map_err(|e| WorkflowError::ScriptExecution(e.to_string()))?;
 
         context
-            .register_global_callable(JsString::from("waitForAgent"), 1, NativeFunction::from_fn_ptr(js_wait_for_agent))
+            .register_global_callable(
+                JsString::from("waitForAgent"),
+                1,
+                NativeFunction::from_fn_ptr(js_wait_for_agent),
+            )
             .map_err(|e| WorkflowError::ScriptExecution(e.to_string()))?;
 
         context
-            .register_global_callable(JsString::from("getEnv"), 1, NativeFunction::from_fn_ptr(js_get_env))
+            .register_global_callable(
+                JsString::from("getEnv"),
+                1,
+                NativeFunction::from_fn_ptr(js_get_env),
+            )
             .map_err(|e| WorkflowError::ScriptExecution(e.to_string()))?;
 
         // Inject task_id as a hidden global so fn pointers can find the right state
@@ -199,14 +225,22 @@ fn get_shared(task_id: &str) -> Option<Arc<Mutex<SharedState>>> {
     reg.get(task_id).cloned()
 }
 
-fn js_log(_this: &boa_engine::JsValue, args: &[boa_engine::JsValue], context: &mut boa_engine::Context) -> boa_engine::JsResult<boa_engine::JsValue> {
+fn js_log(
+    _this: &boa_engine::JsValue,
+    args: &[boa_engine::JsValue],
+    context: &mut boa_engine::Context,
+) -> boa_engine::JsResult<boa_engine::JsValue> {
     let Some(task_id) = get_task_id(context) else {
         return Ok(boa_engine::JsValue::undefined());
     };
     let Some(shared) = get_shared(&task_id) else {
         return Ok(boa_engine::JsValue::undefined());
     };
-    let msg = args.first().and_then(|v| v.as_string()).map(|s| s.to_std_string_escaped()).unwrap_or_default();
+    let msg = args
+        .first()
+        .and_then(|v| v.as_string())
+        .map(|s| s.to_std_string_escaped())
+        .unwrap_or_default();
     let mut state = shared.lock().unwrap();
     if !state.output_buffer.is_empty() {
         state.output_buffer.push('\n');
@@ -215,26 +249,51 @@ fn js_log(_this: &boa_engine::JsValue, args: &[boa_engine::JsValue], context: &m
     Ok(boa_engine::JsValue::undefined())
 }
 
-fn js_spawn_agent(_this: &boa_engine::JsValue, args: &[boa_engine::JsValue], context: &mut boa_engine::Context) -> boa_engine::JsResult<boa_engine::JsValue> {
+fn js_spawn_agent(
+    _this: &boa_engine::JsValue,
+    args: &[boa_engine::JsValue],
+    context: &mut boa_engine::Context,
+) -> boa_engine::JsResult<boa_engine::JsValue> {
     let Some(task_id) = get_task_id(context) else {
-        return Err(boa_engine::JsError::from_opaque(JsString::from("no task context").into()));
+        return Err(boa_engine::JsError::from_opaque(
+            JsString::from("no task context").into(),
+        ));
     };
     let Some(shared) = get_shared(&task_id) else {
-        return Err(boa_engine::JsError::from_opaque(JsString::from("no shared state").into()));
+        return Err(boa_engine::JsError::from_opaque(
+            JsString::from("no shared state").into(),
+        ));
     };
-    let description = args.first().and_then(|v| v.as_string()).map(|s| s.to_std_string_escaped()).unwrap_or_default();
-    let prompt = args.get(1).and_then(|v| v.as_string()).map(|s| s.to_std_string_escaped()).unwrap_or_default();
+    let description = args
+        .first()
+        .and_then(|v| v.as_string())
+        .map(|s| s.to_std_string_escaped())
+        .unwrap_or_default();
+    let prompt = args
+        .get(1)
+        .and_then(|v| v.as_string())
+        .map(|s| s.to_std_string_escaped())
+        .unwrap_or_default();
 
-    let (id, api_key, api_base_url, model, max_total) = {
+    let (id, api_key, api_base_url, model) = {
         let mut state = shared.lock().unwrap();
         if state.agents_spawned >= state.max_total_agents {
             return Err(boa_engine::JsError::from_opaque(
-                JsString::from(format!("agent limit exceeded (max {})", state.max_total_agents)).into(),
+                JsString::from(format!(
+                    "agent limit exceeded (max {})",
+                    state.max_total_agents
+                ))
+                .into(),
             ));
         }
         let id = format!("agent-{}", AGENT_COUNTER.fetch_add(1, Ordering::Relaxed));
         state.agents_spawned += 1;
-        (id, state.api_key.clone(), state.api_base_url.clone(), state.model.clone(), state.max_total_agents)
+        (
+            id,
+            state.api_key.clone(),
+            state.api_base_url.clone(),
+            state.model.clone(),
+        )
     };
 
     // If API key is configured, call real LLM
@@ -252,14 +311,22 @@ fn js_spawn_agent(_this: &boa_engine::JsValue, args: &[boa_engine::JsValue], con
             state.agents_completed += 1;
         }
         Err(e) => {
-            state.agent_results.insert(id.clone(), format!("[Error: {e}]"));
+            state
+                .agent_results
+                .insert(id.clone(), format!("[Error: {e}]"));
             state.agents_failed += 1;
         }
     }
     Ok(JsString::from(id).into())
 }
 
-fn call_llm(api_key: &str, base_url: &str, model: &str, _description: &str, prompt: &str) -> Result<String, String> {
+fn call_llm(
+    api_key: &str,
+    base_url: &str,
+    model: &str,
+    _description: &str,
+    prompt: &str,
+) -> Result<String, String> {
     use std::io::Read;
 
     let url = format!("{base_url}/chat/completions");
@@ -279,9 +346,14 @@ fn call_llm(api_key: &str, base_url: &str, model: &str, _description: &str, prom
         .map_err(|e| format!("API request failed: {e}"))?;
 
     let mut body_str = String::new();
-    response.into_body().as_reader().read_to_string(&mut body_str).map_err(|e| format!("read body failed: {e}"))?;
+    response
+        .into_body()
+        .as_reader()
+        .read_to_string(&mut body_str)
+        .map_err(|e| format!("read body failed: {e}"))?;
 
-    let parsed: serde_json::Value = serde_json::from_str(&body_str).map_err(|e| format!("JSON parse failed: {e}"))?;
+    let parsed: serde_json::Value =
+        serde_json::from_str(&body_str).map_err(|e| format!("JSON parse failed: {e}"))?;
 
     parsed
         .get("choices")
@@ -293,14 +365,26 @@ fn call_llm(api_key: &str, base_url: &str, model: &str, _description: &str, prom
         .ok_or_else(|| format!("unexpected API response structure: {parsed}"))
 }
 
-fn js_wait_for_agent(_this: &boa_engine::JsValue, args: &[boa_engine::JsValue], context: &mut boa_engine::Context) -> boa_engine::JsResult<boa_engine::JsValue> {
+fn js_wait_for_agent(
+    _this: &boa_engine::JsValue,
+    args: &[boa_engine::JsValue],
+    context: &mut boa_engine::Context,
+) -> boa_engine::JsResult<boa_engine::JsValue> {
     let Some(task_id) = get_task_id(context) else {
-        return Err(boa_engine::JsError::from_opaque(JsString::from("no task context").into()));
+        return Err(boa_engine::JsError::from_opaque(
+            JsString::from("no task context").into(),
+        ));
     };
     let Some(shared) = get_shared(&task_id) else {
-        return Err(boa_engine::JsError::from_opaque(JsString::from("no shared state").into()));
+        return Err(boa_engine::JsError::from_opaque(
+            JsString::from("no shared state").into(),
+        ));
     };
-    let agent_id = args.first().and_then(|v| v.as_string()).map(|s| s.to_std_string_escaped()).unwrap_or_default();
+    let agent_id = args
+        .first()
+        .and_then(|v| v.as_string())
+        .map(|s| s.to_std_string_escaped())
+        .unwrap_or_default();
     let state = shared.lock().unwrap();
     match state.agent_results.get(&agent_id) {
         Some(result) => Ok(JsString::from(result.clone()).into()),
@@ -310,14 +394,22 @@ fn js_wait_for_agent(_this: &boa_engine::JsValue, args: &[boa_engine::JsValue], 
     }
 }
 
-fn js_get_env(_this: &boa_engine::JsValue, args: &[boa_engine::JsValue], context: &mut boa_engine::Context) -> boa_engine::JsResult<boa_engine::JsValue> {
+fn js_get_env(
+    _this: &boa_engine::JsValue,
+    args: &[boa_engine::JsValue],
+    context: &mut boa_engine::Context,
+) -> boa_engine::JsResult<boa_engine::JsValue> {
     let Some(task_id) = get_task_id(context) else {
         return Ok(boa_engine::JsValue::null());
     };
     let Some(shared) = get_shared(&task_id) else {
         return Ok(boa_engine::JsValue::null());
     };
-    let key = args.first().and_then(|v| v.as_string()).map(|s| s.to_std_string_escaped()).unwrap_or_default();
+    let key = args
+        .first()
+        .and_then(|v| v.as_string())
+        .map(|s| s.to_std_string_escaped())
+        .unwrap_or_default();
     let state = shared.lock().unwrap();
     match state.env_vars.get(&key) {
         Some(val) => Ok(JsString::from(val.clone()).into()),
@@ -361,7 +453,9 @@ mod tests {
     #[test]
     fn executes_simple_log_script() {
         let runtime = WorkflowRuntime::new();
-        let result = runtime.execute(test_config("log(\"hello world\");")).unwrap();
+        let result = runtime
+            .execute(test_config("log(\"hello world\");"))
+            .unwrap();
         assert_eq!(result.status, WorkflowRunStatus::Completed);
         assert!(result.output.contains("hello world"));
     }
@@ -400,7 +494,11 @@ mod tests {
         "#;
         let result = runtime.execute(test_config(script)).unwrap();
         assert_eq!(result.agents_spawned, 2);
-        assert!(result.output.contains("agent limit exceeded") || result.error.is_some() || result.output.contains("caught"));
+        assert!(
+            result.output.contains("agent limit exceeded")
+                || result.error.is_some()
+                || result.output.contains("caught")
+        );
     }
 
     #[test]
@@ -414,7 +512,9 @@ mod tests {
     #[test]
     fn env_vars_accessible() {
         let mut config = test_config("log(getEnv(\"MY_VAR\"));");
-        config.env_vars.insert("MY_VAR".to_string(), "test_value".to_string());
+        config
+            .env_vars
+            .insert("MY_VAR".to_string(), "test_value".to_string());
         let runtime = WorkflowRuntime::new();
         let result = runtime.execute(config).unwrap();
         assert_eq!(result.status, WorkflowRunStatus::Completed);

@@ -1281,6 +1281,38 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
             }),
             required_permission: PermissionMode::DangerFullAccess,
         },
+        ToolSpec {
+            name: "Workflow",
+            description: "Execute a dynamic workflow script that orchestrates multiple agents to accomplish a complex task.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "script": {
+                        "type": "string",
+                        "description": "JavaScript workflow script to execute"
+                    },
+                    "script_name": {
+                        "type": "string",
+                        "description": "Name for this workflow run"
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Optional description of the workflow"
+                    },
+                    "working_dir": {
+                        "type": "string",
+                        "description": "Working directory for the workflow"
+                    },
+                    "resume_run_id": {
+                        "type": "string",
+                        "description": "Optional run ID to resume a paused workflow"
+                    }
+                },
+                "required": ["script", "script_name"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::WorkspaceWrite,
+        },
     ]
 }
 
@@ -2115,7 +2147,9 @@ fn run_exit_worktree(input: ExitWorktreeInput) -> Result<String, String> {
     match input.action.as_str() {
         "remove" => {
             let force = input.discard_changes.unwrap_or(false);
-            manager.remove(&current_name, force).map_err(|e| e.to_string())?;
+            manager
+                .remove(&current_name, force)
+                .map_err(|e| e.to_string())?;
             to_pretty_json(json!({
                 "name": current_name,
                 "action": "removed",

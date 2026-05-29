@@ -113,7 +113,9 @@ mod tests {
     use crate::session::{ConversationMessage, MessageRole};
 
     fn text_block(text: &str) -> ContentBlock {
-        ContentBlock::Text { text: text.to_string() }
+        ContentBlock::Text {
+            text: text.to_string(),
+        }
     }
 
     fn user_msg(text: &str) -> ConversationMessage {
@@ -154,7 +156,10 @@ mod tests {
         let mut store = SnapshotStore::new(10);
         let messages = vec![user_msg("explain this code")];
         store.capture(&messages, None);
-        assert_eq!(store.list()[0].last_user_text_preview.as_deref(), Some("explain this code"));
+        assert_eq!(
+            store.list()[0].last_user_text_preview.as_deref(),
+            Some("explain this code")
+        );
     }
 
     #[test]

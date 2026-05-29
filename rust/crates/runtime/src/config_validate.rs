@@ -201,6 +201,34 @@ const TOP_LEVEL_FIELDS: &[FieldSpec] = &[
         name: "provider",
         expected: FieldType::Object,
     },
+    FieldSpec {
+        name: "disableWorkflows",
+        expected: FieldType::Bool,
+    },
+    FieldSpec {
+        name: "fallbackModel",
+        expected: FieldType::String,
+    },
+    FieldSpec {
+        name: "worktree",
+        expected: FieldType::Object,
+    },
+    FieldSpec {
+        name: "allowAllClaudeAiMcps",
+        expected: FieldType::Bool,
+    },
+    FieldSpec {
+        name: "leanSystemPromptDefault",
+        expected: FieldType::Bool,
+    },
+    FieldSpec {
+        name: "pluginSuggestionMarketplaces",
+        expected: FieldType::StringArray,
+    },
+    FieldSpec {
+        name: "disallowedTools",
+        expected: FieldType::StringArray,
+    },
 ];
 
 const HOOKS_FIELDS: &[FieldSpec] = &[
@@ -214,6 +242,34 @@ const HOOKS_FIELDS: &[FieldSpec] = &[
     },
     FieldSpec {
         name: "PostToolUseFailure",
+        expected: FieldType::StringArray,
+    },
+    FieldSpec {
+        name: "Notification",
+        expected: FieldType::StringArray,
+    },
+    FieldSpec {
+        name: "Stop",
+        expected: FieldType::StringArray,
+    },
+    FieldSpec {
+        name: "MessageDisplay",
+        expected: FieldType::StringArray,
+    },
+    FieldSpec {
+        name: "SessionStart",
+        expected: FieldType::StringArray,
+    },
+    FieldSpec {
+        name: "TeammateIdle",
+        expected: FieldType::StringArray,
+    },
+    FieldSpec {
+        name: "TaskCreated",
+        expected: FieldType::StringArray,
+    },
+    FieldSpec {
+        name: "TaskCompleted",
         expected: FieldType::StringArray,
     },
 ];
@@ -237,6 +293,10 @@ const PERMISSIONS_FIELDS: &[FieldSpec] = &[
     },
     FieldSpec {
         name: "ask",
+        expected: FieldType::StringArray,
+    },
+    FieldSpec {
+        name: "disallowedTools",
         expected: FieldType::StringArray,
     },
 ];

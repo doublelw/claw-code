@@ -66,7 +66,11 @@ impl WorktreeManager {
         }))
     }
 
-    pub fn create(&self, name: &str, base_ref: Option<&str>) -> Result<WorktreeInfo, WorktreeError> {
+    pub fn create(
+        &self,
+        name: &str,
+        base_ref: Option<&str>,
+    ) -> Result<WorktreeInfo, WorktreeError> {
         let safe_name = sanitize_branch_name(name);
         let branch_name = format!("claw/{safe_name}");
         let worktree_path = self.worktrees_dir.join(&safe_name);
@@ -81,7 +85,9 @@ impl WorktreeManager {
             .args([
                 "worktree",
                 "add",
-                worktree_path.to_str().ok_or_else(|| WorktreeError::CommandFailed("invalid path".into()))?,
+                worktree_path
+                    .to_str()
+                    .ok_or_else(|| WorktreeError::CommandFailed("invalid path".into()))?,
                 "-b",
                 &branch_name,
                 base,
@@ -164,9 +170,13 @@ impl WorktreeManager {
             return Err(WorktreeError::NotFound(name.to_string()));
         }
 
-        let mut args = vec!["worktree", "remove", worktree_path.to_str().ok_or_else(|| {
-            WorktreeError::CommandFailed("invalid path".into())
-        })?];
+        let mut args = vec![
+            "worktree",
+            "remove",
+            worktree_path
+                .to_str()
+                .ok_or_else(|| WorktreeError::CommandFailed("invalid path".into()))?,
+        ];
         if force {
             args.push("--force");
         }
@@ -196,7 +206,13 @@ impl WorktreeManager {
 
 fn sanitize_branch_name(name: &str) -> String {
     name.chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect::<String>()
         .trim_matches('-')
         .to_string()
@@ -228,14 +244,25 @@ mod tests {
 
     #[test]
     fn worktree_error_display() {
-        assert!(WorktreeError::NotAGitRepo(PathBuf::from("/foo")).to_string().contains("/foo"));
-        assert!(WorktreeError::AlreadyExists("test".into()).to_string().contains("test"));
-        assert!(WorktreeError::CommandFailed("fatal".into()).to_string().contains("fatal"));
+        assert!(WorktreeError::NotAGitRepo(PathBuf::from("/foo"))
+            .to_string()
+            .contains("/foo"));
+        assert!(WorktreeError::AlreadyExists("test".into())
+            .to_string()
+            .contains("test"));
+        assert!(WorktreeError::CommandFailed("fatal".into())
+            .to_string()
+            .contains("fatal"));
     }
 
     #[test]
     fn exit_action_equality() {
         assert_eq!(ExitAction::Keep, ExitAction::Keep);
-        assert_ne!(ExitAction::Keep, ExitAction::Remove { discard_changes: false });
+        assert_ne!(
+            ExitAction::Keep,
+            ExitAction::Remove {
+                discard_changes: false
+            }
+        );
     }
 }

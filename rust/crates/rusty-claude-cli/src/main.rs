@@ -547,6 +547,28 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             args,
             output_format,
         } => LiveCli::print_skills(args.as_deref(), output_format)?,
+        CliAction::Workflows {
+            args,
+            output_format: _,
+        } => {
+            use runtime::WorkflowOrchestrator;
+            let orch = WorkflowOrchestrator::new();
+            let runs = orch.list_runs();
+            if runs.is_empty() {
+                println!("No active workflows.");
+            } else {
+                for run in &runs {
+                    println!(
+                        "{}  {:?}  {}  agents:{}",
+                        run.run_id,
+                        run.status,
+                        run.script_name,
+                        run.agents.len()
+                    );
+                }
+            }
+            println!("Use 'claw' and /workflows run <template> to start a workflow");
+        }
         CliAction::Plugins {
             action,
             target,
@@ -686,6 +708,10 @@ enum CliAction {
         output_format: CliOutputFormat,
     },
     Skills {
+        args: Option<String>,
+        output_format: CliOutputFormat,
+    },
+    Workflows {
         args: Option<String>,
         output_format: CliOutputFormat,
     },
@@ -1317,6 +1343,13 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
                 }),
             }
         }
+        "workflows" => {
+            let args = join_optional_args(&rest[1..]);
+            Ok(CliAction::Workflows {
+                args,
+                output_format,
+            })
+        }
         "system-prompt" => parse_system_prompt_args(&rest[1..], model, output_format),
         "acp" => parse_acp_args(&rest[1..], output_format),
         "login" | "logout" => Err(removed_auth_surface_error(rest[0].as_str())),
@@ -1590,6 +1623,7 @@ fn bare_slash_command_guidance(command_name: &str) -> Option<String> {
             | "plugins"
             | "marketplace"
             | "skills"
+            | "workflows"
             | "system-prompt"
             | "init"
             | "prompt"
@@ -5072,6 +5106,7 @@ struct LiveCli {
     runtime: BuiltRuntime,
     session: SessionHandle,
     prompt_history: Vec<PromptHistoryEntry>,
+    workflow_orchestrator: runtime::WorkflowOrchestrator,
 }
 
 #[derive(Debug, Clone)]
@@ -5586,6 +5621,7 @@ impl LiveCli {
             runtime,
             session,
             prompt_history: Vec::new(),
+            workflow_orchestrator: runtime::WorkflowOrchestrator::new(),
         };
         cli.persist_session()?;
         Ok(cli)
@@ -5681,6 +5717,30 @@ impl LiveCli {
     }
 
     fn run_turn(&mut self, input: &str) -> Result<(), Box<dyn std::error::Error>> {
+        // Auto-trigger workflow when user message contains workflow keywords
+        let lower = input.to_lowercase();
+        if lower.contains("workflow")
+            || lower.contains("deep research")
+            || lower.contains("deep-research")
+        {
+            let topic = input.trim();
+            let script = if lower.contains("deep research") || lower.contains("deep-research") {
+                runtime::WorkflowScript::deep_research_script(topic)
+            } else {
+                runtime::WorkflowScript::fan_out_template(3, topic)
+            };
+            let working_dir = std::env::current_dir().unwrap_or_default();
+            match Self::spawn_workflow_execution(
+                &self.workflow_orchestrator,
+                &script,
+                "auto-triggered",
+                &working_dir,
+            ) {
+                Ok(run_id) => println!("⚡ Auto-triggered workflow: {run_id}"),
+                Err(e) => eprintln!("Workflow auto-trigger failed: {e}"),
+            }
+        }
+
         let (mut runtime, hook_abort_monitor) = self.prepare_turn_runtime(true)?;
         let mut spinner = Spinner::new();
         let mut stdout = io::stdout();
@@ -6059,6 +6119,19 @@ impl LiveCli {
                 if let Err(error) = Self::print_agents(args.as_deref(), CliOutputFormat::Text) {
                     eprintln!("{error}");
                 }
+                let workflow_runs = self.workflow_orchestrator.list_runs();
+                if !workflow_runs.is_empty() {
+                    println!("\nWorkflow runs:");
+                    for run in &workflow_runs {
+                        println!(
+                            "  {}  {:?}  {}  agents:{}",
+                            run.run_id,
+                            run.status,
+                            run.script_name,
+                            run.agents.len()
+                        );
+                    }
+                }
                 false
             }
             SlashCommand::Skills { args } => {
@@ -6131,19 +6204,256 @@ impl LiveCli {
                 false
             }
             SlashCommand::Workflows { action } => {
+                let orch = &self.workflow_orchestrator;
                 match action.as_deref() {
                     None | Some("list") => {
-                        println!("Workflows\n  Status           no active workflows\n  Use              /workflows run <name> to start a workflow");
+                        let runs = orch.list_runs();
+                        if runs.is_empty() {
+                            println!("No active workflows.");
+                        } else {
+                            println!("Workflow runs:");
+                            for run in &runs {
+                                println!(
+                                    "  {}  {:?}  {}  agents:{}",
+                                    run.run_id,
+                                    run.status,
+                                    run.script_name,
+                                    run.agents.len()
+                                );
+                            }
+                        }
+                        println!("Use /workflows run <template> to start a workflow");
                     }
-                    Some(action) => {
-                        println!("Workflows\n  Action           {action}\n  Status           no active workflows");
+                    Some(action_str) => {
+                        let parts: Vec<&str> = action_str.splitn(2, ' ').collect();
+                        match parts.first().copied().unwrap_or("") {
+                            "status" => {
+                                let target_id = parts.get(1).copied();
+                                if let Some(id) = target_id {
+                                    if let Some(run) = orch.get_run(id) {
+                                        println!("Run: {}", run.run_id);
+                                        println!("  Script: {}", run.script_name);
+                                        println!("  Status: {:?}", run.status);
+                                        if !run.agents.is_empty() {
+                                            println!("  Agents:");
+                                            for agent in &run.agents {
+                                                println!(
+                                                    "    {}  {:?}  {}",
+                                                    agent.agent_id, agent.status, agent.description
+                                                );
+                                            }
+                                        }
+                                        if let Some(ref output) = run.result_output {
+                                            println!("  Output: {}", output);
+                                        }
+                                    } else {
+                                        println!("Workflow run not found: {id}");
+                                    }
+                                } else {
+                                    let runs = orch.list_runs();
+                                    if runs.is_empty() {
+                                        println!("No workflow runs.");
+                                    } else {
+                                        for run in &runs {
+                                            println!(
+                                                "{}  {:?}  {}  agents:{}",
+                                                run.run_id,
+                                                run.status,
+                                                run.script_name,
+                                                run.agents.len()
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            "pause" => {
+                                if let Some(id) = parts.get(1).copied() {
+                                    match orch.pause(id) {
+                                        Ok(()) => println!("Paused: {id}"),
+                                        Err(e) => println!("Error: {e}"),
+                                    }
+                                } else {
+                                    println!("Usage: /workflows pause <run_id>");
+                                }
+                            }
+                            "resume" => {
+                                if let Some(id) = parts.get(1).copied() {
+                                    match orch.resume(id) {
+                                        Ok(()) => println!("Resumed: {id}"),
+                                        Err(e) => println!("Error: {e}"),
+                                    }
+                                } else {
+                                    println!("Usage: /workflows resume <run_id>");
+                                }
+                            }
+                            "cancel" => {
+                                if let Some(id) = parts.get(1).copied() {
+                                    match orch.cancel(id) {
+                                        Ok(()) => println!("Cancelled: {id}"),
+                                        Err(e) => println!("Error: {e}"),
+                                    }
+                                } else {
+                                    println!("Usage: /workflows cancel <run_id>");
+                                }
+                            }
+                            "templates" => {
+                                let config_home = std::env::var("HOME")
+                                    .map(|h| std::path::PathBuf::from(h).join(".claude"))
+                                    .unwrap_or_else(|_| std::path::PathBuf::from("/tmp/.claude"));
+                                let store = runtime::WorkflowStore::new(
+                                    &std::env::current_dir().unwrap_or_default(),
+                                    &config_home,
+                                );
+                                let entries = store.discover();
+                                if entries.is_empty() {
+                                    println!("No saved workflow templates found.");
+                                } else {
+                                    println!("Workflow templates:");
+                                    for entry in &entries {
+                                        let source = match entry.source {
+                                            runtime::WorkflowSource::Project => "project",
+                                            runtime::WorkflowSource::User => "user",
+                                            runtime::WorkflowSource::Builtin => "builtin",
+                                        };
+                                        println!(
+                                            "  {}  [{}]  {}",
+                                            entry.name,
+                                            source,
+                                            entry.description.as_deref().unwrap_or("-")
+                                        );
+                                    }
+                                }
+                                println!("\nBuilt-in: fan-out, pipeline, deep-research, adversarial, voting");
+                            }
+                            "save" => {
+                                let name = parts.get(1).map(|s| *s);
+                                if let Some(wf_name) = name {
+                                    let scope = parts.get(2).copied().unwrap_or("project");
+                                    let config_home = std::env::var("HOME")
+                                        .map(|h| std::path::PathBuf::from(h).join(".claude"))
+                                        .unwrap_or_else(|_| {
+                                            std::path::PathBuf::from("/tmp/.claude")
+                                        });
+                                    let store = runtime::WorkflowStore::new(
+                                        &std::env::current_dir().unwrap_or_default(),
+                                        &config_home,
+                                    );
+                                    let script =
+                                        runtime::WorkflowScript::fan_out_template(3, wf_name);
+                                    let result = match scope {
+                                        "user" => store.save_to_user(wf_name, &script, None),
+                                        _ => store.save_to_project(wf_name, &script, None),
+                                    };
+                                    match result {
+                                        Ok(path) => println!(
+                                            "Saved workflow '{wf_name}' to {}",
+                                            path.display()
+                                        ),
+                                        Err(e) => println!("Error saving: {e}"),
+                                    }
+                                } else {
+                                    println!("Usage: /workflows save <name> [project|user]");
+                                }
+                            }
+                            "delete" => {
+                                let wf_name = parts.get(1).map(|s| *s);
+                                if let Some(name) = wf_name {
+                                    let scope = parts.get(2).copied().unwrap_or("project");
+                                    let config_home = std::env::var("HOME")
+                                        .map(|h| std::path::PathBuf::from(h).join(".claude"))
+                                        .unwrap_or_else(|_| {
+                                            std::path::PathBuf::from("/tmp/.claude")
+                                        });
+                                    let store = runtime::WorkflowStore::new(
+                                        &std::env::current_dir().unwrap_or_default(),
+                                        &config_home,
+                                    );
+                                    let source = match scope {
+                                        "user" => runtime::WorkflowSource::User,
+                                        _ => runtime::WorkflowSource::Project,
+                                    };
+                                    match store.delete(name, source) {
+                                        Ok(true) => println!("Deleted workflow: {name}"),
+                                        Ok(false) => println!("Workflow not found: {name}"),
+                                        Err(e) => println!("Error: {e}"),
+                                    }
+                                } else {
+                                    println!("Usage: /workflows delete <name> [project|user]");
+                                }
+                            }
+                            "run" => {
+                                let template = parts.get(1).copied().unwrap_or("fan-out");
+                                let working_dir = std::env::current_dir().unwrap_or_default();
+                                let script = match template {
+                                    "deep-research" => {
+                                        runtime::WorkflowScript::deep_research_script(
+                                            "general research topic",
+                                        )
+                                    }
+                                    "fan-out" => runtime::WorkflowScript::fan_out_template(
+                                        3,
+                                        "analyze codebase",
+                                    ),
+                                    "pipeline" => runtime::WorkflowScript::pipeline_template(&[
+                                        "analyze",
+                                        "synthesize",
+                                        "report",
+                                    ]),
+                                    "adversarial" => {
+                                        runtime::WorkflowScript::adversarial_review_template(
+                                            "code quality review",
+                                        )
+                                    }
+                                    "voting" => {
+                                        runtime::WorkflowScript::voting_template(3, "best approach")
+                                    }
+                                    _ => {
+                                        println!("Unknown template: {template}");
+                                        println!("Available: fan-out, pipeline, deep-research, adversarial, voting");
+                                        return Ok(false);
+                                    }
+                                };
+                                match Self::spawn_workflow_execution(
+                                    orch,
+                                    &script,
+                                    template,
+                                    &working_dir,
+                                ) {
+                                    Ok(run_id) => {
+                                        println!("Started workflow: {run_id} ({template})");
+                                        println!("Use /workflows status {run_id} to monitor");
+                                    }
+                                    Err(e) => println!("Error: {e}"),
+                                }
+                            }
+                            other => {
+                                println!("Unknown action: {other}");
+                                println!("Actions: list, status, run, templates, save, delete, pause, resume, cancel");
+                            }
+                        }
                     }
                 }
                 false
             }
             SlashCommand::CodeReview { args } => {
                 let scope = args.as_deref().unwrap_or("current changes");
-                println!("Running code review on {scope}...");
+                let script = runtime::WorkflowScript::adversarial_review_template(&format!(
+                    "Code review: {scope}"
+                ));
+                let working_dir = std::env::current_dir().unwrap_or_default();
+                match Self::spawn_workflow_execution(
+                    &self.workflow_orchestrator,
+                    &script,
+                    "code-review",
+                    &working_dir,
+                ) {
+                    Ok(run_id) => {
+                        println!("Code review started: {run_id}");
+                        println!("Scope: {scope}");
+                        println!("Use /workflows status {run_id} to monitor");
+                    }
+                    Err(e) => println!("Error: {e}"),
+                }
                 false
             }
             SlashCommand::ReloadSkills => {
@@ -6159,7 +6469,21 @@ impl LiveCli {
             }
             SlashCommand::DeepResearch { topic } => {
                 let topic_str = topic.as_deref().unwrap_or("unspecified topic");
-                println!("Starting deep research on: {topic_str}");
+                let script = runtime::WorkflowScript::deep_research_script(topic_str);
+                let working_dir = std::env::current_dir().unwrap_or_default();
+                match Self::spawn_workflow_execution(
+                    &self.workflow_orchestrator,
+                    &script,
+                    "deep-research",
+                    &working_dir,
+                ) {
+                    Ok(run_id) => {
+                        println!("Deep research started: {run_id}");
+                        println!("Topic: {topic_str}");
+                        println!("Use /workflows status {run_id} to monitor");
+                    }
+                    Err(e) => println!("Error: {e}"),
+                }
                 false
             }
             SlashCommand::Unknown(name) => {
@@ -6167,6 +6491,51 @@ impl LiveCli {
                 false
             }
         })
+    }
+
+    fn spawn_workflow_execution(
+        orchestrator: &runtime::WorkflowOrchestrator,
+        script: &str,
+        name: &str,
+        working_dir: &std::path::PathBuf,
+    ) -> Result<String, String> {
+        if let Err(e) = runtime::WorkflowScript::validate(script) {
+            return Err(format!("Script validation failed: {:?}", e.errors));
+        }
+
+        let run_id = orchestrator
+            .start(script, name, working_dir)
+            .map_err(|e| e.to_string())?;
+
+        let orch = orchestrator.clone();
+        let rid = run_id.clone();
+        let script_owned = script.to_string();
+        let wd = working_dir.clone();
+        std::thread::Builder::new()
+            .name(format!("workflow-{rid}"))
+            .spawn(move || {
+                let rt = runtime::WorkflowRuntime::new();
+                let config = runtime::WorkflowExecutionConfig {
+                    script: script_owned,
+                    task_id: rid.clone(),
+                    working_dir: wd,
+                    env_vars: std::env::vars().collect(),
+                    api_key: std::env::var("ANTHROPIC_API_KEY").ok(),
+                    api_base_url: std::env::var("ANTHROPIC_BASE_URL").ok(),
+                    model: None,
+                };
+                match rt.execute(config) {
+                    Ok(result) => {
+                        let _ = orch.complete(&rid, result.output);
+                    }
+                    Err(e) => {
+                        let _ = orch.fail(&rid, e.to_string());
+                    }
+                }
+            })
+            .map_err(|e| format!("spawn failed: {e}"))?;
+
+        Ok(run_id)
     }
 
     fn persist_session(&self) -> Result<(), Box<dyn std::error::Error>> {
@@ -10125,7 +10494,7 @@ impl ApiClient for AnthropicRuntimeClient {
                 .enable_tools
                 .then(|| filter_tool_specs(&self.tool_registry, self.allowed_tools.as_ref())),
             tool_choice: self.enable_tools.then_some(ToolChoice::Auto),
-            stream: true,
+            stream: std::env::var("CLAW_DISABLE_STREAMING").as_deref() != Ok("1"),
             reasoning_effort: self.reasoning_effort.clone(),
             ..Default::default()
         };

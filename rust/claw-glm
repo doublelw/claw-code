@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# claw-glm — 一键启动 CLAW Code with GLM Coding Plan (Anthropic 兼容模式)
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+CLAW_BIN="$SCRIPT_DIR/target/release/claw"
+CLAW_DIR="$SCRIPT_DIR"
+
+# API Key: 优先从 .glm-key 文件，其次 GLM_API_KEY 环境变量
+GLM_KEY=""
+if [ -f "$SCRIPT_DIR/.glm-key" ]; then
+    GLM_KEY="$(cat "$SCRIPT_DIR/.glm-key" | tr -d '[:space:]')"
+elif [ -n "${GLM_API_KEY:-}" ]; then
+    GLM_KEY="$GLM_API_KEY"
+else
+    echo "Error: GLM API Key not found."
+    echo ""
+    echo "Setup (one-time):"
+    echo "  echo 'your-api-key-here' > $SCRIPT_DIR/.glm-key"
+    echo "  chmod 600 $SCRIPT_DIR/.glm-key"
+    echo ""
+    echo "Or set environment variable:"
+    echo "  export GLM_API_KEY='your-api-key-here'"
+    exit 1
+fi
+
+# GLM Coding Plan 通过 Anthropic 兼容接口接入
+# 模型名随便写，后端实际路由到 GLM-4.7
+if [ ! -f "$CLAW_BIN" ]; then
+    echo "No release binary found, running via cargo..."
+    cd "$CLAW_DIR"
+    exec env \
+        ANTHROPIC_API_KEY="$GLM_KEY" \
+        ANTHROPIC_BASE_URL="https://open.bigmodel.cn/api/anthropic" \
+        API_TIMEOUT_MS="300000" \
+        CLAW_DISABLE_STREAMING="1" \
+        cargo run --bin claw -- "$@"
+else
+    exec env \
+        ANTHROPIC_API_KEY="$GLM_KEY" \
+        ANTHROPIC_BASE_URL="https://open.bigmodel.cn/api/anthropic" \
+        API_TIMEOUT_MS="300000" \
+        CLAW_DISABLE_STREAMING="1" \
+        "$CLAW_BIN" "$@"
+fi

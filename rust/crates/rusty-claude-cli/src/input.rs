@@ -101,6 +101,7 @@ impl Helper for SlashCommandHelper {}
 pub struct LineEditor {
     prompt: String,
     editor: Editor<SlashCommandHelper, DefaultHistory>,
+    history_path: std::path::PathBuf,
 }
 
 impl LineEditor {
@@ -109,6 +110,7 @@ impl LineEditor {
         let config = Config::builder()
             .completion_type(CompletionType::List)
             .edit_mode(EditMode::Emacs)
+            .history_ignore_space(true)
             .build();
         let mut editor = Editor::<SlashCommandHelper, DefaultHistory>::with_config(config)
             .expect("rustyline editor should initialize");
@@ -116,9 +118,20 @@ impl LineEditor {
         editor.bind_sequence(KeyEvent(KeyCode::Char('J'), Modifiers::CTRL), Cmd::Newline);
         editor.bind_sequence(KeyEvent(KeyCode::Enter, Modifiers::SHIFT), Cmd::Newline);
 
+        // Load persistent history from ~/.claw/repl_history
+        let home = std::env::var("HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
+        let history_path = home.join(".claw").join("repl_history");
+        if let Some(parent) = history_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = editor.load_history(&history_path);
+
         Self {
             prompt: prompt.into(),
             editor,
+            history_path,
         }
     }
 
@@ -129,6 +142,7 @@ impl LineEditor {
         }
 
         let _ = self.editor.add_history_entry(entry);
+        let _ = self.editor.save_history(&self.history_path);
     }
 
     pub fn set_completions(&mut self, completions: Vec<String>) {

@@ -109,11 +109,11 @@ impl WorkflowRuntime {
             api_base_url: config
                 .api_base_url
                 .clone()
-                .unwrap_or_else(|| "https://open.bigmodel.cn/api/coding/paas/v4".to_string()),
+                .unwrap_or_else(|| "https://open.bigmodel.cn/api/anthropic".to_string()),
             model: config
                 .model
                 .clone()
-                .unwrap_or_else(|| "GLM-4.7".to_string()),
+                .unwrap_or_else(|| "claude-3-5-sonnet-20241022".to_string()),
             ..Default::default()
         }));
 
@@ -329,18 +329,19 @@ fn call_llm(
 ) -> Result<String, String> {
     use std::io::Read;
 
-    let url = format!("{base_url}/chat/completions");
+    // Use Anthropic Messages API format (compatible with GLM Coding Plan)
+    let url = format!("{base_url}/v1/messages");
     let body = serde_json::json!({
         "model": model,
+        "max_tokens": 2048,
         "messages": [
             {"role": "user", "content": prompt}
-        ],
-        "max_tokens": 2048,
-        "temperature": 0.7
+        ]
     });
 
     let response = ureq::post(&url)
-        .header("Authorization", format!("Bearer {api_key}"))
+        .header("x-api-key", api_key)
+        .header("anthropic-version", "2023-06-01")
         .header("Content-Type", "application/json")
         .send_json(&body)
         .map_err(|e| format!("API request failed: {e}"))?;
@@ -355,12 +356,13 @@ fn call_llm(
     let parsed: serde_json::Value =
         serde_json::from_str(&body_str).map_err(|e| format!("JSON parse failed: {e}"))?;
 
+    // Anthropic response: {"content": [{"type": "text", "text": "..."}]}
     parsed
-        .get("choices")
-        .and_then(|c| c.get(0))
-        .and_then(|c| c.get("message"))
-        .and_then(|m| m.get("content"))
-        .and_then(|c| c.as_str())
+        .get("content")
+        .and_then(|c| c.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|block| block.get("text"))
+        .and_then(|t| t.as_str())
         .map(|s| s.to_string())
         .ok_or_else(|| format!("unexpected API response structure: {parsed}"))
 }

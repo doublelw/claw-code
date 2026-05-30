@@ -69,6 +69,7 @@ struct OrchestratorInner {
     runs: HashMap<String, WorkflowRun>,
 }
 
+#[derive(Clone)]
 pub struct WorkflowOrchestrator {
     inner: Arc<Mutex<OrchestratorInner>>,
 }

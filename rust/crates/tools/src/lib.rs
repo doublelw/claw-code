@@ -72,6 +72,12 @@ fn global_worker_registry() -> &'static WorkerRegistry {
     REGISTRY.get_or_init(WorkerRegistry::new)
 }
 
+fn global_workflow_orchestrator() -> &'static runtime::WorkflowOrchestrator {
+    use std::sync::OnceLock;
+    static ORCHESTRATOR: OnceLock<runtime::WorkflowOrchestrator> = OnceLock::new();
+    ORCHESTRATOR.get_or_init(runtime::WorkflowOrchestrator::new)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolManifestEntry {
     pub name: String,
@@ -1450,6 +1456,10 @@ fn execute_tool_with_enforcer(
         "GitBlame" => from_value::<GitBlameInput>(input).and_then(run_git_blame),
         "EnterWorktree" => from_value::<EnterWorktreeInput>(input).and_then(run_enter_worktree),
         "ExitWorktree" => from_value::<ExitWorktreeInput>(input).and_then(run_exit_worktree),
+        "Workflow" => {
+            let orchestrator = global_workflow_orchestrator();
+            from_value::<Value>(input).and_then(|v| run_workflow(v, orchestrator))
+        }
         _ => Err(format!("unsupported tool: {name}")),
     }
 }
@@ -2161,6 +2171,65 @@ fn run_exit_worktree(input: ExitWorktreeInput) -> Result<String, String> {
             "action": "kept"
         })),
     }
+}
+
+fn run_workflow(
+    input: Value,
+    orchestrator: &runtime::WorkflowOrchestrator,
+) -> Result<String, String> {
+    let script = input["script"].as_str().unwrap_or("").to_string();
+    let name = input["script_name"]
+        .as_str()
+        .unwrap_or("unnamed")
+        .to_string();
+    let working_dir = input["working_dir"]
+        .as_str()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+
+    if let Err(e) = runtime::WorkflowScript::validate(&script) {
+        return Err(format!("Script validation failed: {:?}", e.errors));
+    }
+
+    if let Some(resume_id) = input["resume_run_id"].as_str() {
+        orchestrator.resume(resume_id).map_err(|e| e.to_string())?;
+        return Ok(format!("Resumed workflow run: {resume_id}"));
+    }
+
+    let run_id = orchestrator
+        .start(&script, &name, &working_dir)
+        .map_err(|e| e.to_string())?;
+
+    let orch = (*orchestrator).clone();
+    let rid = run_id.clone();
+    let wd = working_dir;
+    std::thread::Builder::new()
+        .name(format!("workflow-{rid}"))
+        .spawn(move || {
+            let rt = runtime::WorkflowRuntime::new();
+            let config = runtime::WorkflowExecutionConfig {
+                script,
+                task_id: rid.clone(),
+                working_dir: wd,
+                env_vars: std::env::vars().collect(),
+                api_key: std::env::var("ANTHROPIC_API_KEY").ok(),
+                api_base_url: std::env::var("ANTHROPIC_BASE_URL").ok(),
+                model: None,
+            };
+            match rt.execute(config) {
+                Ok(result) => {
+                    let _ = orch.complete(&rid, result.output);
+                }
+                Err(e) => {
+                    let _ = orch.fail(&rid, e.to_string());
+                }
+            }
+        })
+        .map_err(|e| format!("failed to spawn workflow thread: {e}"))?;
+
+    Ok(format!(
+        "Started workflow run: {run_id}\nScript: {name}\nUse /workflows status {run_id} to monitor progress"
+    ))
 }
 
 fn from_value<T: for<'de> Deserialize<'de>>(input: &Value) -> Result<T, String> {

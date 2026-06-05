@@ -5717,9 +5717,10 @@ impl LiveCli {
     }
 
     fn run_turn(&mut self, input: &str) -> Result<(), Box<dyn std::error::Error>> {
-        // Auto-trigger workflow when user message contains workflow keywords
+        // Auto-trigger workflow when user message contains ultracode/deep-research keywords
         let lower = input.to_lowercase();
-        if lower.contains("workflow")
+        if lower.contains("ultracode")
+            || lower.contains("ultra code")
             || lower.contains("deep research")
             || lower.contains("deep-research")
         {
@@ -6407,9 +6408,17 @@ impl LiveCli {
                                     "voting" => {
                                         runtime::WorkflowScript::voting_template(3, "best approach")
                                     }
+                                    "decompose" => runtime::WorkflowScript::decompose_template(
+                                        "analyze codebase",
+                                        8,
+                                    ),
+                                    "audit" => runtime::WorkflowScript::code_audit_template(
+                                        "current codebase",
+                                        6,
+                                    ),
                                     _ => {
                                         println!("Unknown template: {template}");
-                                        println!("Available: fan-out, pipeline, deep-research, adversarial, voting");
+                                        println!("Available: fan-out, pipeline, deep-research, adversarial, voting, decompose, audit");
                                         return Ok(false);
                                     }
                                 };
@@ -7454,7 +7463,8 @@ impl LiveCli {
 fn should_trigger_workflow(user_message: &str, effort: &runtime::EffortLevel) -> bool {
     let lower = user_message.to_lowercase();
     effort == &runtime::EffortLevel::Ultracode
-        || lower.contains("workflow")
+        || lower.contains("ultracode")
+        || lower.contains("ultra code")
         || lower.contains("deep research")
         || lower.contains("deep-research")
 }

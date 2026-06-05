@@ -203,6 +203,74 @@ log("Phase 5: Final revision complete");
 final_report"#
         )
     }
+
+    /// Task decomposition — splits a large task into small parallel subtasks,
+    /// collects results, merges with dedup, and runs QA check.
+    pub fn decompose_template(task: &str, max_chunks: usize) -> String {
+        let chunk_count = std::cmp::min(std::cmp::max(3, task.len() / 50), max_chunks);
+        let mut script = String::new();
+        script.push_str(&format!("// Task Decomposition: {task}\n"));
+        script.push_str(&format!("const TOTAL_CHUNKS = {chunk_count};\n"));
+        script.push_str(&format!("const TASK = \"{task}\";\n"));
+        script.push_str("const agents = [];\n\n");
+        script.push_str("// Phase 1: Fan-out small focused subtasks in parallel\n");
+        script.push_str("for (let i = 0; i < TOTAL_CHUNKS; i++) {\n");
+        script.push_str("  agents.push(spawnAgent(\"chunk-\" + (i+1),\n");
+        script.push_str("    `You are subtask ${i+1} of ${TOTAL_CHUNKS}.\n");
+        script.push_str("Focus on ONLY your assigned scope. Be thorough but concise.\n");
+        script.push_str("Full task: ${TASK}\n");
+        script.push_str("Your scope: Handle aspect ${i+1} of ${TOTAL_CHUNKS}.\n");
+        script.push_str("Output a structured summary.`));\n");
+        script.push_str("}\n");
+        script.push_str("log(\"Phase 1: Spawned \" + agents.length + \" parallel subtasks\");\n\n");
+        script.push_str("// Phase 2: Collect results\n");
+        script.push_str("const results = agents.map(id => waitForAgent(id));\n");
+        script.push_str("log(\"Phase 2: All \" + results.length + \" subtasks completed\");\n\n");
+        script.push_str("// Phase 3: Merge with dedup\n");
+        script.push_str("const merger = spawnAgent(\"merger\",\n");
+        script.push_str("  `Merge ${results.length} subtask results into one coherent output.\n");
+        script.push_str("Original task: ${TASK}\n");
+        script.push_str("Results:\n");
+        script.push_str(
+            "${results.map((r, i) => \"Subtask \" + (i+1) + \":\" + r).join(\"\\n\\n\")}\n",
+        );
+        script.push_str("Eliminate redundancy. Resolve contradictions. Organize logically.`);\n");
+        script.push_str("const merged = waitForAgent(merger);\n");
+        script.push_str("log(\"Phase 3: Merge complete\");\n\n");
+        script.push_str("// Phase 4: QA check\n");
+        script.push_str("const qa = spawnAgent(\"qa\",\n");
+        script.push_str("  `Review for completeness. Original task: ${TASK}\\nOutput:\\n${merged}\\nFlag gaps.`);\n");
+        script.push_str("waitForAgent(qa);\n");
+        script.push_str("log(\"Phase 4: QA complete\");\n");
+        script.push_str("merged\n");
+        script
+    }
+
+    /// Code audit decomposition — splits codebase into file groups for parallel review
+    pub fn code_audit_template(scope: &str, file_groups: usize) -> String {
+        let mut script = String::new();
+        script.push_str(&format!("// Code Audit: {scope}\n"));
+        script.push_str(&format!("const GROUPS = {file_groups};\n"));
+        script.push_str("const agents = [];\n");
+        script.push_str("for (let i = 0; i < GROUPS; i++) {\n");
+        script.push_str(&format!("  agents.push(spawnAgent(\"audit-\" + (i+1),\n"));
+        script.push_str(&format!(
+            "    `Code audit for: {scope}, group ${{i+1}}/${{GROUPS}}.\n"
+        ));
+        script.push_str("Check: bugs, security, performance, maintainability, error handling.\n");
+        script.push_str("Report with severity levels (Critical/High/Medium/Low).`));\n");
+        script.push_str("}\n");
+        script.push_str("log(\"Spawned \" + agents.length + \" audit groups\");\n");
+        script.push_str("const results = agents.map(id => waitForAgent(id));\n");
+        script.push_str("log(\"All groups complete\");\n\n");
+        script.push_str("const dedup = spawnAgent(\"dedup\",\n");
+        script.push_str("  `Merge audit reports. Deduplicate. Rank by severity.\n");
+        script.push_str("Reports:\\n${results.join(\"\\n\\n---\\n\\n\")}`);\n");
+        script.push_str("const final_audit = waitForAgent(dedup);\n");
+        script.push_str("log(\"Audit dedup complete\");\n");
+        script.push_str("final_audit\n");
+        script
+    }
 }
 
 #[cfg(test)]
@@ -325,5 +393,72 @@ mod tests {
     fn deep_research_script_uses_provided_topic() {
         let script = WorkflowScript::deep_research_script("machine learning");
         assert!(script.contains("machine learning"));
+    }
+
+    // --- New templates for v2.1.163 ---
+
+    #[test]
+    fn decompose_template_passes_validation() {
+        let script = WorkflowScript::decompose_template("analyze the entire codebase for bugs", 8);
+        assert!(WorkflowScript::validate(&script).is_ok());
+    }
+
+    #[test]
+    fn decompose_template_contains_phases() {
+        let script = WorkflowScript::decompose_template("test task", 5);
+        assert!(script.contains("Phase 1"));
+        assert!(script.contains("Phase 4"));
+        assert!(script.contains("test task"));
+    }
+
+    #[test]
+    fn decompose_template_respects_max_chunks() {
+        let script = WorkflowScript::decompose_template("short task", 3);
+        // For a short task (10 chars), chunk_count = max(3, 10/50) = 3
+        assert!(script.contains("TOTAL_CHUNKS = 3"));
+    }
+
+    #[test]
+    fn decompose_template_scales_with_task_size() {
+        let long_task = "a".repeat(200);
+        let script = WorkflowScript::decompose_template(&long_task, 10);
+        // For 200 chars: max(3, 200/50) = 4, capped at 10
+        assert!(script.contains("TOTAL_CHUNKS = 4"));
+    }
+
+    #[test]
+    fn decompose_template_includes_merger_and_qa() {
+        let script = WorkflowScript::decompose_template("test", 5);
+        assert!(script.contains("merger"));
+        assert!(script.contains("qa"));
+        assert!(script.contains("dedup") || script.contains("Eliminate redundancy"));
+    }
+
+    #[test]
+    fn code_audit_template_passes_validation() {
+        let script = WorkflowScript::code_audit_template("src/ directory", 6);
+        assert!(WorkflowScript::validate(&script).is_ok());
+    }
+
+    #[test]
+    fn code_audit_template_contains_scope() {
+        let script = WorkflowScript::code_audit_template("rust crate", 4);
+        assert!(script.contains("rust crate"));
+        assert!(script.contains("GROUPS = 4"));
+    }
+
+    #[test]
+    fn code_audit_template_includes_severity_levels() {
+        let script = WorkflowScript::code_audit_template("code", 3);
+        assert!(script.contains("Critical"));
+        assert!(script.contains("High"));
+        assert!(script.contains("Medium"));
+        assert!(script.contains("Low"));
+    }
+
+    #[test]
+    fn code_audit_template_has_dedup_phase() {
+        let script = WorkflowScript::code_audit_template("code", 3);
+        assert!(script.contains("dedup"));
     }
 }

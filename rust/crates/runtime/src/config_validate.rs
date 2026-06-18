@@ -229,6 +229,22 @@ const TOP_LEVEL_FIELDS: &[FieldSpec] = &[
         name: "disallowedTools",
         expected: FieldType::StringArray,
     },
+    FieldSpec {
+        name: "enforceAvailableModels",
+        expected: FieldType::Bool,
+    },
+    FieldSpec {
+        name: "availableModels",
+        expected: FieldType::StringArray,
+    },
+    FieldSpec {
+        name: "language",
+        expected: FieldType::String,
+    },
+    FieldSpec {
+        name: "disableBundledSkills",
+        expected: FieldType::Bool,
+    },
 ];
 
 const HOOKS_FIELDS: &[FieldSpec] = &[

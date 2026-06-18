@@ -87,6 +87,10 @@ pub struct RuntimeFeatureConfig {
     lean_system_prompt_default: bool,
     plugin_suggestion_marketplaces: Vec<String>,
     disallowed_tools: Vec<String>,
+    enforce_available_models: bool,
+    available_models: Vec<String>,
+    language: Option<String>,
+    disable_bundled_skills: bool,
 }
 
 /// Ordered chain of fallback model identifiers used when the primary
@@ -369,6 +373,15 @@ impl ConfigLoader {
             )
             .unwrap_or_default(),
             disallowed_tools: parse_optional_disallowed_tools(&merged_value),
+            enforce_available_models: parse_optional_bool(&merged_value, "enforceAvailableModels")
+                .unwrap_or(false),
+            available_models: parse_optional_string_vec(&merged_value, "availableModels")
+                .unwrap_or_default(),
+            language: parse_optional_string_field(&merged_value, "language"),
+            disable_bundled_skills: parse_optional_bool(&merged_value, "disableBundledSkills")
+                .unwrap_or(false)
+                || std::env::var("CLAW_DISABLE_BUNDLED_SKILLS").as_deref() == Ok("1")
+                || std::env::var("CLAUDE_CODE_DISABLE_BUNDLED_SKILLS").as_deref() == Ok("1"),
         };
 
         Ok(RuntimeConfig {
@@ -443,6 +456,15 @@ impl ConfigLoader {
             )
             .unwrap_or_default(),
             disallowed_tools: parse_optional_disallowed_tools(&merged_value),
+            enforce_available_models: parse_optional_bool(&merged_value, "enforceAvailableModels")
+                .unwrap_or(false),
+            available_models: parse_optional_string_vec(&merged_value, "availableModels")
+                .unwrap_or_default(),
+            language: parse_optional_string_field(&merged_value, "language"),
+            disable_bundled_skills: parse_optional_bool(&merged_value, "disableBundledSkills")
+                .unwrap_or(false)
+                || std::env::var("CLAW_DISABLE_BUNDLED_SKILLS").as_deref() == Ok("1")
+                || std::env::var("CLAUDE_CODE_DISABLE_BUNDLED_SKILLS").as_deref() == Ok("1"),
         };
 
         let config = RuntimeConfig {
@@ -574,6 +596,30 @@ impl RuntimeConfig {
         self.feature_config.disallowed_tools()
     }
 
+    /// v2.1.175
+    #[must_use]
+    pub fn enforce_available_models(&self) -> bool {
+        self.feature_config.enforce_available_models()
+    }
+
+    /// v2.1.175/176
+    #[must_use]
+    pub fn available_models(&self) -> &[String] {
+        self.feature_config.available_models()
+    }
+
+    /// v2.1.176
+    #[must_use]
+    pub fn language(&self) -> Option<&str> {
+        self.feature_config.language()
+    }
+
+    /// v2.1.169
+    #[must_use]
+    pub fn disable_bundled_skills(&self) -> bool {
+        self.feature_config.disable_bundled_skills()
+    }
+
     /// Merge config-level default trusted roots with per-call roots.
     ///
     /// Config roots are defaults and are kept first; per-call roots extend the
@@ -687,6 +733,30 @@ impl RuntimeFeatureConfig {
     #[must_use]
     pub fn disallowed_tools(&self) -> &[String] {
         &self.disallowed_tools
+    }
+
+    /// v2.1.175: when enabled, `available_models` also constrains the Default model.
+    #[must_use]
+    pub fn enforce_available_models(&self) -> bool {
+        self.enforce_available_models
+    }
+
+    /// v2.1.175/176: allowlist of models a session may use.
+    #[must_use]
+    pub fn available_models(&self) -> &[String] {
+        &self.available_models
+    }
+
+    /// v2.1.176: language for session titles / UI localization.
+    #[must_use]
+    pub fn language(&self) -> Option<&str> {
+        self.language.as_deref()
+    }
+
+    /// v2.1.169: hide bundled skills/workflows/built-in slash commands from the model.
+    #[must_use]
+    pub fn disable_bundled_skills(&self) -> bool {
+        self.disable_bundled_skills
     }
 
     /// Merge this config's default trusted roots with per-call roots.
@@ -2796,6 +2866,60 @@ mod tests {
             loaded.feature_config().fallback_model(),
             Some("claude-haiku-4-5-20251213")
         );
+
+        fs::remove_dir_all(root).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn parses_v2175_v2176_settings() {
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let home = root.join("home").join(".claw");
+        fs::create_dir_all(&home).expect("home config dir");
+        fs::create_dir_all(&cwd).expect("project dir");
+        fs::write(
+            home.join("settings.json"),
+            r#"{
+                "enforceAvailableModels": true,
+                "availableModels": ["anthropic/claude-opus-4-6", "anthropic/claude-fable-5"],
+                "language": "zh",
+                "disableBundledSkills": true
+            }"#,
+        )
+        .expect("write settings");
+
+        let loaded = ConfigLoader::new(&cwd, &home)
+            .load()
+            .expect("config should load");
+
+        assert!(loaded.enforce_available_models());
+        assert_eq!(
+            loaded.available_models(),
+            ["anthropic/claude-opus-4-6", "anthropic/claude-fable-5"]
+        );
+        assert_eq!(loaded.language(), Some("zh"));
+        assert!(loaded.disable_bundled_skills());
+
+        fs::remove_dir_all(root).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn disable_bundled_skills_defaults_false() {
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let home = root.join("home").join(".claw");
+        fs::create_dir_all(&home).expect("home config dir");
+        fs::create_dir_all(&cwd).expect("project dir");
+        fs::write(home.join("settings.json"), "{}").expect("write settings");
+
+        let loaded = ConfigLoader::new(&cwd, &home)
+            .load()
+            .expect("config should load");
+
+        assert!(!loaded.enforce_available_models());
+        assert!(loaded.available_models().is_empty());
+        assert_eq!(loaded.language(), None);
+        assert!(!loaded.disable_bundled_skills());
 
         fs::remove_dir_all(root).expect("cleanup temp dir");
     }

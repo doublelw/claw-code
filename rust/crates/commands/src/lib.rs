@@ -1069,6 +1069,13 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("<topic>"),
         resume_supported: true,
     },
+    SlashCommandSpec {
+        name: "cd",
+        aliases: &[],
+        summary: "Move session to a new working directory",
+        argument_hint: Some("<path>"),
+        resume_supported: false,
+    },
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1227,6 +1234,11 @@ pub enum SlashCommand {
     DeepResearch {
         topic: Option<String>,
     },
+    /// v2.1.169: move the session to a new working directory without breaking
+    /// the prompt cache mid-session.
+    Cd {
+        path: Option<String>,
+    },
     Unknown(String),
     Team {
         action: Option<String>,
@@ -1333,6 +1345,7 @@ impl SlashCommand {
             Self::ReloadSkills => "/reload-skills",
             Self::Goal { .. } => "/goal",
             Self::DeepResearch { .. } => "/deep-research",
+            Self::Cd { .. } => "/cd",
             Self::Team { .. } => "/team",
             Self::Sandbox => "/sandbox",
             Self::Mcp { .. } => "/mcp",
@@ -1558,6 +1571,7 @@ pub fn validate_slash_command_input(
             condition: remainder,
         },
         "deep-research" => SlashCommand::DeepResearch { topic: remainder },
+        "cd" => SlashCommand::Cd { path: remainder },
         other => SlashCommand::Unknown(other.to_string()),
     }))
 }
@@ -4692,6 +4706,7 @@ pub fn handle_slash_command(
         | SlashCommand::ReloadSkills
         | SlashCommand::Goal { .. }
         | SlashCommand::DeepResearch { .. }
+        | SlashCommand::Cd { .. }
         | SlashCommand::Unknown(_) => None,
     }
 }
@@ -5252,6 +5267,28 @@ mod tests {
     }
 
     #[test]
+    fn parses_cd_command_with_path() {
+        let cmd = validate_slash_command_input("/cd /tmp/work").expect("should parse");
+        assert!(matches!(
+            cmd,
+            Some(SlashCommand::Cd { ref path }) if path.as_deref() == Some("/tmp/work")
+        ));
+        assert_eq!(cmd.unwrap().slash_name(), "/cd");
+    }
+
+    #[test]
+    fn parses_cd_command_without_path() {
+        let cmd = validate_slash_command_input("/cd").expect("should parse");
+        assert!(matches!(cmd, Some(SlashCommand::Cd { ref path }) if path.is_none()));
+    }
+
+    #[test]
+    fn cd_command_appears_in_help() {
+        let help = render_slash_command_help();
+        assert!(help.contains("/cd"));
+    }
+
+    #[test]
     fn renders_help_from_shared_specs() {
         let help = render_slash_command_help();
         assert!(help.contains("Start here        /status, /diff, /agents, /skills, /commit"));
@@ -5294,7 +5331,7 @@ mod tests {
         assert!(help.contains("aliases: /skill"));
         assert!(!help.contains("/login"));
         assert!(!help.contains("/logout"));
-        assert_eq!(slash_command_specs().len(), 144);
+        assert_eq!(slash_command_specs().len(), 145);
         assert!(resume_supported_slash_commands().len() >= 39);
     }
 

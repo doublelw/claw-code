@@ -253,7 +253,7 @@ final_report"#
         script.push_str(&format!("const GROUPS = {file_groups};\n"));
         script.push_str("const agents = [];\n");
         script.push_str("for (let i = 0; i < GROUPS; i++) {\n");
-        script.push_str(&format!("  agents.push(spawnAgent(\"audit-\" + (i+1),\n"));
+        script.push_str("  agents.push(spawnAgent(\"audit-\" + (i+1),\n");
         script.push_str(&format!(
             "    `Code audit for: {scope}, group ${{i+1}}/${{GROUPS}}.\n"
         ));

@@ -359,6 +359,13 @@ enum PermissionRuleMatcher {
     Any,
     Exact(String),
     Prefix(String),
+    /// v2.1.178: `Tool(key:value)` matches a specific input parameter.
+    /// `wildcard=true` means any value for that key (`key:*`).
+    Param {
+        key: String,
+        value: String,
+        wildcard: bool,
+    },
 }
 
 impl PermissionRule {
@@ -401,6 +408,22 @@ impl PermissionRule {
             }
             PermissionRuleMatcher::Prefix(prefix) => extract_permission_subject(input)
                 .is_some_and(|candidate| candidate.starts_with(prefix)),
+            PermissionRuleMatcher::Param {
+                key,
+                value,
+                wildcard,
+            } => match extract_tool_param(input, key) {
+                // Key present in the tool input JSON → match its value (v2.1.178).
+                Some(actual) => *wildcard || actual == *value,
+                // Key absent (e.g. `bash(git:*)` where `git` isn't a JSON field)
+                // → fall back to subject-prefix matching so legacy path rules
+                // keep working.
+                None => extract_permission_subject(input).is_some_and(|candidate| {
+                    candidate.starts_with(key) || {
+                        *wildcard && candidate.starts_with(key.as_str())
+                    }
+                }),
+            },
         }
     }
 }
@@ -410,9 +433,51 @@ fn parse_rule_matcher(content: &str) -> PermissionRuleMatcher {
     if unescaped.is_empty() || unescaped == "*" {
         PermissionRuleMatcher::Any
     } else if let Some(prefix) = unescaped.strip_suffix(":*") {
-        PermissionRuleMatcher::Prefix(prefix.to_string())
+        // Distinguish a `param:*` (v2.1.178 param wildcard) from a `path:*`
+        // glob prefix: a param key is a bare identifier (alnum/underscore,
+        // no path separators or spaces). Otherwise treat as a path Prefix.
+        if is_param_key(prefix) {
+            PermissionRuleMatcher::Param {
+                key: prefix.to_string(),
+                value: String::new(),
+                wildcard: true,
+            }
+        } else {
+            PermissionRuleMatcher::Prefix(prefix.to_string())
+        }
+    } else if let Some((key, value)) = unescaped.split_once(':') {
+        // `param:value` form — only when the left side is a bare identifier.
+        if is_param_key(key) && !value.is_empty() {
+            PermissionRuleMatcher::Param {
+                key: key.to_string(),
+                value: value.to_string(),
+                wildcard: false,
+            }
+        } else {
+            PermissionRuleMatcher::Exact(unescaped)
+        }
     } else {
         PermissionRuleMatcher::Exact(unescaped)
+    }
+}
+
+/// A v2.1.178 param key is a bare identifier: letters, digits, underscores,
+/// with no path separators, spaces, or glob characters.
+fn is_param_key(s: &str) -> bool {
+    !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// v2.1.178: extract a single parameter value from a tool's JSON input.
+/// Tries string and number scalars; returns the raw string value.
+fn extract_tool_param(input: &str, key: &str) -> Option<String> {
+    let parsed: serde_json::Value = serde_json::from_str(input.trim()).ok()?;
+    let value = parsed.get(key)?;
+    match value {
+        serde_json::Value::String(s) => Some(s.clone()),
+        serde_json::Value::Number(n) => Some(n.to_string()),
+        serde_json::Value::Bool(b) => Some(b.to_string()),
+        // For objects/arrays fall back to the serialized form
+        other => Some(other.to_string()),
     }
 }
 
@@ -626,6 +691,70 @@ mod tests {
 
         let result = policy.authorize("read_file", "{}", None);
         assert_eq!(result, PermissionOutcome::Allow);
+    }
+
+    #[test]
+    fn param_value_rule_matches_tool_input_parameter() {
+        // v2.1.178: Agent(model:opus) denies Agent calls whose model is opus
+        let rules = RuntimePermissionRuleConfig::new(
+            Vec::new(),
+            vec!["Agent(model:opus)".to_string()],
+            Vec::new(),
+            Vec::new(),
+        );
+        let policy = PermissionPolicy::new(PermissionMode::Allow).with_permission_rules(&rules);
+
+        assert!(matches!(
+            policy.authorize("Agent", r#"{"model":"opus","prompt":"x"}"#, None),
+            PermissionOutcome::Deny { .. }
+        ));
+        // Different model value → allowed
+        assert_eq!(
+            policy.authorize("Agent", r#"{"model":"sonnet","prompt":"x"}"#, None),
+            PermissionOutcome::Allow
+        );
+    }
+
+    #[test]
+    fn param_wildcard_rule_matches_any_value_for_key() {
+        // Agent(model:*) denies any Agent call that sets a model param
+        let rules = RuntimePermissionRuleConfig::new(
+            Vec::new(),
+            vec!["Agent(model:*)".to_string()],
+            Vec::new(),
+            Vec::new(),
+        );
+        let policy = PermissionPolicy::new(PermissionMode::Allow).with_permission_rules(&rules);
+
+        assert!(matches!(
+            policy.authorize("Agent", r#"{"model":"haiku"}"#, None),
+            PermissionOutcome::Deny { .. }
+        ));
+        // No model param set → allowed (and does NOT falsely match)
+        assert_eq!(
+            policy.authorize("Agent", r#"{"prompt":"x"}"#, None),
+            PermissionOutcome::Allow
+        );
+    }
+
+    #[test]
+    fn legacy_command_prefix_still_works_via_param_fallback() {
+        // bash(git:*) must still allow git commands even though `git` is a
+        // bare identifier — backward compatibility via subject fallback.
+        let rules = RuntimePermissionRuleConfig::new(
+            vec!["bash(git:*)".to_string()],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        let policy = PermissionPolicy::new(PermissionMode::ReadOnly)
+            .with_tool_requirement("bash", PermissionMode::DangerFullAccess)
+            .with_permission_rules(&rules);
+
+        assert_eq!(
+            policy.authorize("bash", r#"{"command":"git status"}"#, None),
+            PermissionOutcome::Allow
+        );
     }
 
     #[test]

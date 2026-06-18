@@ -529,6 +529,15 @@ fn plugin_load_failure_json(failure: &plugins::PluginLoadFailure) -> Value {
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().skip(1).collect();
+    // v2.1.169: --safe-mode / CLAUDE_CODE_SAFE_MODE disables all customizations.
+    if args.iter().any(|a| a == "--safe-mode")
+        || std::env::var("CLAW_SAFE_MODE").as_deref() == Ok("1")
+        || std::env::var("CLAUDE_CODE_SAFE_MODE").as_deref() == Ok("1")
+    {
+        // Persist so downstream config/plugin/skill/hook loaders observe it.
+        std::env::set_var("CLAW_SAFE_MODE", "1");
+        eprintln!("⚠️  Safe mode active: CLAUDE.md, plugins, skills, hooks, and MCP servers are disabled.");
+    }
     match parse_args(&args)? {
         CliAction::DumpManifests {
             output_format,
@@ -859,6 +868,8 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
     let mut base_commit: Option<String> = None;
     let mut reasoning_effort: Option<String> = None;
     let mut allow_broad_cwd = false;
+    // v2.1.169: --safe-mode handling lives in run() (sets CLAW_SAFE_MODE env so
+    // all downstream loaders observe it); here we only consume the flag token.
     // #755: -p prompt text captured as single token; remaining args continue
     // flag parsing. None until `-p <text>` is seen.
     let mut short_p_prompt: Option<String> = None;
@@ -975,6 +986,10 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
             }
             "--allow-broad-cwd" => {
                 allow_broad_cwd = true;
+                index += 1;
+            }
+            "--safe-mode" => {
+                // v2.1.169: run() reads this flag and sets CLAW_SAFE_MODE env.
                 index += 1;
             }
             "-p" => {
@@ -1949,19 +1964,55 @@ fn resolve_model_alias(model: &str) -> &str {
         "opus" => "anthropic/claude-opus-4-6",
         "sonnet" => "anthropic/claude-sonnet-4-6",
         "haiku" => "anthropic/claude-haiku-4-5-20251213",
+        "fable" | "fable5" => "anthropic/claude-fable-5",
         _ => model,
     }
+}
+
+/// v2.1.170/173: Normalize model names.
+/// - Fable 5 includes 1M context by default, so the `[1m]` suffix is stripped.
+/// - Trailing `[1m]` on any model is normalized away (the context is implicit).
+/// - Case-variant `FABLE-5` / `fable-5` collapse to the canonical id.
+#[must_use]
+pub fn normalize_model_name(model: &str) -> String {
+    let trimmed = model.trim();
+    // Strip an optional trailing [1m] / [1M] context-window suffix
+    let stripped = trimmed
+        .strip_suffix("[1m]")
+        .or_else(|| trimmed.strip_suffix("[1M]"))
+        .map(str::trim)
+        .unwrap_or(trimmed);
+    // Canonicalize Fable 5 family name variants
+    let lower = stripped.to_lowercase();
+    if lower == "fable" || lower == "fable-5" || lower == "fable5" || lower == "claude-fable-5" {
+        return "anthropic/claude-fable-5".to_string();
+    }
+    stripped.to_string()
+}
+
+/// v2.1.170: detect whether a resolved model id belongs to the Fable 5 family.
+#[must_use]
+pub fn is_fable_5(model: &str) -> bool {
+    let normalized = normalize_model_name(model);
+    normalized == "anthropic/claude-fable-5"
+        || normalized.to_lowercase().contains("fable-5")
+        || normalized.to_lowercase().contains("fable5")
 }
 
 /// Resolve a model name through user-defined config aliases first, then fall
 /// back to the built-in alias table. This is the entry point used wherever a
 /// user-supplied model string is about to be dispatched to a provider.
 fn resolve_model_alias_with_config(model: &str) -> String {
-    let trimmed = model.trim();
-    if let Some(resolved) = config_alias_for_current_dir(trimmed) {
-        return resolve_model_alias(&resolved).to_string();
+    let normalized = normalize_model_name(model);
+    if let Some(resolved) = config_alias_for_current_dir(&normalized) {
+        return normalize_model_alias_output(&resolved);
     }
-    resolve_model_alias(trimmed).to_string()
+    normalize_model_alias_output(&normalized)
+}
+
+/// Apply the built-in alias table, then normalize the result (strips [1m], etc.).
+fn normalize_model_alias_output(model: &str) -> String {
+    normalize_model_name(resolve_model_alias(model))
 }
 
 /// Validate model syntax at parse time.
@@ -4893,7 +4944,8 @@ fn run_resume_command(
         | SlashCommand::CodeReview { .. }
         | SlashCommand::ReloadSkills
         | SlashCommand::Goal { .. }
-        | SlashCommand::DeepResearch { .. } => Err("unsupported resumed slash command".into()),
+        | SlashCommand::DeepResearch { .. }
+        | SlashCommand::Cd { .. } => Err("unsupported resumed slash command".into()),
     }
 }
 
@@ -5717,16 +5769,25 @@ impl LiveCli {
     }
 
     fn run_turn(&mut self, input: &str) -> Result<(), Box<dyn std::error::Error>> {
-        // Auto-trigger workflow when user message contains ultracode/deep-research keywords
+        // v2.1.178: trigger workflows only on EXPLICIT phrases, not any mention
+        // of the word "workflow". ultracode (effort level) and deep-research
+        // remain strong-intent triggers.
         let lower = input.to_lowercase();
+        let explicit_workflow = lower.contains("run a workflow")
+            || lower.contains("workflow:")
+            || lower.contains("run workflow")
+            || lower.contains("use a workflow");
         if lower.contains("ultracode")
             || lower.contains("ultra code")
             || lower.contains("deep research")
             || lower.contains("deep-research")
+            || explicit_workflow
         {
             let topic = input.trim();
             let script = if lower.contains("deep research") || lower.contains("deep-research") {
                 runtime::WorkflowScript::deep_research_script(topic)
+            } else if explicit_workflow {
+                runtime::WorkflowScript::decompose_template(topic, 8)
             } else {
                 runtime::WorkflowScript::fan_out_template(3, topic)
             };
@@ -6492,6 +6553,47 @@ impl LiveCli {
                         println!("Use /workflows status {run_id} to monitor");
                     }
                     Err(e) => println!("Error: {e}"),
+                }
+                false
+            }
+            SlashCommand::Cd { path } => {
+                let target = match path.as_deref() {
+                    Some(p) if !p.trim().is_empty() => p.trim().to_string(),
+                    _ => {
+                        // No arg: print current directory
+                        let cwd = std::env::current_dir()
+                            .map(|p| p.display().to_string())
+                            .unwrap_or_else(|_| "<unknown>".to_string());
+                        println!("Current directory: {cwd}");
+                        println!("Usage: /cd <path>");
+                        return Ok(false);
+                    }
+                };
+                // Expand ~ to home dir
+                let expanded = if target == "~" {
+                    std::env::var("HOME").unwrap_or_else(|_| target.clone())
+                } else if let Some(rest) = target.strip_prefix("~/") {
+                    format!(
+                        "{}/{}",
+                        std::env::var("HOME").unwrap_or_else(|_| "~".to_string()),
+                        rest
+                    )
+                } else {
+                    target.clone()
+                };
+                let new_path = std::path::PathBuf::from(&expanded);
+                if !new_path.exists() {
+                    println!("Error: directory does not exist: {expanded}");
+                    return Ok(false);
+                }
+                match std::env::set_current_dir(&new_path) {
+                    Ok(()) => {
+                        let now = std::env::current_dir()
+                            .map(|p| p.display().to_string())
+                            .unwrap_or_else(|_| expanded.clone());
+                        println!("Changed directory to: {now}");
+                    }
+                    Err(e) => println!("Error changing directory: {e}"),
                 }
                 false
             }
@@ -17142,7 +17244,9 @@ mod dump_manifests_tests {
 
 #[cfg(test)]
 mod alias_resolution_tests {
-    use super::{resolve_model_alias_with_config, validate_model_syntax};
+    use super::{
+        is_fable_5, normalize_model_name, resolve_model_alias_with_config, validate_model_syntax,
+    };
 
     #[test]
     fn test_alias_resolution_builtin() {
@@ -17189,5 +17293,48 @@ mod alias_resolution_tests {
         let model = "openai/gpt-4o";
         assert_eq!(resolve_model_alias_with_config(model), model);
         assert!(validate_model_syntax(model).is_ok());
+    }
+
+    // --- v2.1.170/173: Fable 5 + [1m] normalization ---
+
+    #[test]
+    fn normalize_strips_1m_suffix() {
+        // [1m] stripped; fable variant canonicalized to full id
+        assert_eq!(
+            normalize_model_name("claude-fable-5[1m]"),
+            "anthropic/claude-fable-5"
+        );
+        // Non-fable models: [1m] stripped, id otherwise unchanged
+        assert_eq!(
+            normalize_model_name("anthropic/claude-opus-4-6[1M]"),
+            "anthropic/claude-opus-4-6"
+        );
+    }
+
+    #[test]
+    fn normalize_canonicalizes_fable_variants() {
+        assert_eq!(normalize_model_name("fable-5"), "anthropic/claude-fable-5");
+        assert_eq!(normalize_model_name("FABLE5"), "anthropic/claude-fable-5");
+        assert_eq!(normalize_model_name("fable"), "anthropic/claude-fable-5");
+    }
+
+    #[test]
+    fn is_fable_5_detects_family() {
+        assert!(is_fable_5("anthropic/claude-fable-5"));
+        assert!(is_fable_5("fable-5[1m]"));
+        assert!(!is_fable_5("anthropic/claude-opus-4-6"));
+    }
+
+    #[test]
+    fn fable_alias_resolves_through_config() {
+        assert_eq!(
+            resolve_model_alias_with_config("fable"),
+            "anthropic/claude-fable-5"
+        );
+        // [1m] suffix stripped during resolution
+        assert_eq!(
+            resolve_model_alias_with_config("fable-5[1m]"),
+            "anthropic/claude-fable-5"
+        );
     }
 }

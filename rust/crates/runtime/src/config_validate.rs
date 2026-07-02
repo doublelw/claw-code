@@ -245,7 +245,29 @@ const TOP_LEVEL_FIELDS: &[FieldSpec] = &[
         name: "disableBundledSkills",
         expected: FieldType::Bool,
     },
+    FieldSpec {
+        name: "respondToBashCommands",
+        expected: FieldType::Bool,
+    },
+    FieldSpec {
+        name: "attribution",
+        expected: FieldType::Object,
+    },
+    FieldSpec {
+        name: "autoMode",
+        expected: FieldType::Object,
+    },
 ];
+
+const ATTRIBUTION_FIELDS: &[FieldSpec] = &[FieldSpec {
+    name: "sessionUrl",
+    expected: FieldType::Bool,
+}];
+
+const AUTO_MODE_FIELDS: &[FieldSpec] = &[FieldSpec {
+    name: "classifyAllShell",
+    expected: FieldType::Bool,
+}];
 
 const HOOKS_FIELDS: &[FieldSpec] = &[
     FieldSpec {
@@ -364,6 +386,14 @@ const SANDBOX_FIELDS: &[FieldSpec] = &[
     FieldSpec {
         name: "allowedMounts",
         expected: FieldType::StringArray,
+    },
+    FieldSpec {
+        name: "allowAppleEvents",
+        expected: FieldType::Bool,
+    },
+    FieldSpec {
+        name: "credentials",
+        expected: FieldType::Bool,
     },
 ];
 
@@ -609,6 +639,25 @@ pub fn validate_config_file(
             provider,
             PROVIDER_FIELDS,
             "provider",
+            source,
+            &path_display,
+        ));
+    }
+    // v2.1.183/186/193 nested objects
+    if let Some(attribution) = object.get("attribution").and_then(JsonValue::as_object) {
+        result.merge(validate_object_keys(
+            attribution,
+            ATTRIBUTION_FIELDS,
+            "attribution",
+            source,
+            &path_display,
+        ));
+    }
+    if let Some(auto_mode) = object.get("autoMode").and_then(JsonValue::as_object) {
+        result.merge(validate_object_keys(
+            auto_mode,
+            AUTO_MODE_FIELDS,
+            "autoMode",
             source,
             &path_display,
         ));

@@ -91,6 +91,12 @@ pub struct RuntimeFeatureConfig {
     available_models: Vec<String>,
     language: Option<String>,
     disable_bundled_skills: bool,
+    /// v2.1.186: `!` bash commands trigger Claude to respond to the output.
+    respond_to_bash_commands: bool,
+    /// v2.1.183: omit the session URL from commits/PRs when false.
+    attribution_session_url: bool,
+    /// v2.1.193: route all Bash/PowerShell through the auto-mode classifier.
+    auto_mode_classify_all_shell: bool,
 }
 
 /// Ordered chain of fallback model identifiers used when the primary
@@ -382,6 +388,15 @@ impl ConfigLoader {
                 .unwrap_or(false)
                 || std::env::var("CLAW_DISABLE_BUNDLED_SKILLS").as_deref() == Ok("1")
                 || std::env::var("CLAUDE_CODE_DISABLE_BUNDLED_SKILLS").as_deref() == Ok("1"),
+            respond_to_bash_commands: parse_optional_bool(&merged_value, "respondToBashCommands")
+                .unwrap_or(true),
+            attribution_session_url: nested_bool(&merged_value, &["attribution", "sessionUrl"])
+                .unwrap_or(true),
+            auto_mode_classify_all_shell: nested_bool(
+                &merged_value,
+                &["autoMode", "classifyAllShell"],
+            )
+            .unwrap_or(false),
         };
 
         Ok(RuntimeConfig {
@@ -465,6 +480,15 @@ impl ConfigLoader {
                 .unwrap_or(false)
                 || std::env::var("CLAW_DISABLE_BUNDLED_SKILLS").as_deref() == Ok("1")
                 || std::env::var("CLAUDE_CODE_DISABLE_BUNDLED_SKILLS").as_deref() == Ok("1"),
+            respond_to_bash_commands: parse_optional_bool(&merged_value, "respondToBashCommands")
+                .unwrap_or(true),
+            attribution_session_url: nested_bool(&merged_value, &["attribution", "sessionUrl"])
+                .unwrap_or(true),
+            auto_mode_classify_all_shell: nested_bool(
+                &merged_value,
+                &["autoMode", "classifyAllShell"],
+            )
+            .unwrap_or(false),
         };
 
         let config = RuntimeConfig {
@@ -620,6 +644,24 @@ impl RuntimeConfig {
         self.feature_config.disable_bundled_skills()
     }
 
+    /// v2.1.186
+    #[must_use]
+    pub fn respond_to_bash_commands(&self) -> bool {
+        self.feature_config.respond_to_bash_commands()
+    }
+
+    /// v2.1.183
+    #[must_use]
+    pub fn attribution_session_url(&self) -> bool {
+        self.feature_config.attribution_session_url()
+    }
+
+    /// v2.1.193
+    #[must_use]
+    pub fn auto_mode_classify_all_shell(&self) -> bool {
+        self.feature_config.auto_mode_classify_all_shell()
+    }
+
     /// Merge config-level default trusted roots with per-call roots.
     ///
     /// Config roots are defaults and are kept first; per-call roots extend the
@@ -757,6 +799,24 @@ impl RuntimeFeatureConfig {
     #[must_use]
     pub fn disable_bundled_skills(&self) -> bool {
         self.disable_bundled_skills
+    }
+
+    /// v2.1.186
+    #[must_use]
+    pub fn respond_to_bash_commands(&self) -> bool {
+        self.respond_to_bash_commands
+    }
+
+    /// v2.1.183
+    #[must_use]
+    pub fn attribution_session_url(&self) -> bool {
+        self.attribution_session_url
+    }
+
+    /// v2.1.193
+    #[must_use]
+    pub fn auto_mode_classify_all_shell(&self) -> bool {
+        self.auto_mode_classify_all_shell
     }
 
     /// Merge this config's default trusted roots with per-call roots.
@@ -1396,6 +1456,8 @@ fn parse_optional_sandbox_config(root: &JsonValue) -> Result<SandboxConfig, Conf
         filesystem_mode,
         allowed_mounts: optional_string_array(sandbox, "allowedMounts", "merged settings.sandbox")?
             .unwrap_or_default(),
+        allow_apple_events: optional_bool(sandbox, "allowAppleEvents", "merged settings.sandbox")?,
+        credentials: optional_bool(sandbox, "credentials", "merged settings.sandbox")?,
     })
 }
 
@@ -1618,6 +1680,19 @@ fn optional_string<'a>(
 
 fn parse_optional_bool(value: &JsonValue, key: &str) -> Option<bool> {
     value.as_object()?.get(key)?.as_bool()
+}
+
+/// Read a bool from a nested object path, e.g. ["attribution","sessionUrl"].
+/// Used for v2.1.183/193 nested settings.
+fn nested_bool(root: &JsonValue, path: &[&str]) -> Option<bool> {
+    let mut current = root.as_object()?;
+    for (i, key) in path.iter().enumerate() {
+        if i + 1 == path.len() {
+            return current.get(*key)?.as_bool();
+        }
+        current = current.get(*key)?.as_object()?;
+    }
+    None
 }
 
 fn optional_bool(
@@ -2920,6 +2995,41 @@ mod tests {
         assert!(loaded.available_models().is_empty());
         assert_eq!(loaded.language(), None);
         assert!(!loaded.disable_bundled_skills());
+        // v2.1.186/183/193 defaults
+        assert!(loaded.respond_to_bash_commands());
+        assert!(loaded.attribution_session_url());
+        assert!(!loaded.auto_mode_classify_all_shell());
+
+        fs::remove_dir_all(root).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn parses_v2186_v2193_settings() {
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let home = root.join("home").join(".claw");
+        fs::create_dir_all(&home).expect("home config dir");
+        fs::create_dir_all(&cwd).expect("project dir");
+        fs::write(
+            home.join("settings.json"),
+            r#"{
+                "respondToBashCommands": false,
+                "attribution": {"sessionUrl": false},
+                "autoMode": {"classifyAllShell": true},
+                "sandbox": {"allowAppleEvents": true, "credentials": false}
+            }"#,
+        )
+        .expect("write settings");
+
+        let loaded = ConfigLoader::new(&cwd, &home)
+            .load()
+            .expect("config should load");
+
+        assert!(!loaded.respond_to_bash_commands());
+        assert!(!loaded.attribution_session_url());
+        assert!(loaded.auto_mode_classify_all_shell());
+        assert_eq!(loaded.sandbox().allow_apple_events, Some(true));
+        assert_eq!(loaded.sandbox().credentials, Some(false));
 
         fs::remove_dir_all(root).expect("cleanup temp dir");
     }

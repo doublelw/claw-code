@@ -31,6 +31,11 @@ pub struct SandboxConfig {
     pub network_isolation: Option<bool>,
     pub filesystem_mode: Option<FilesystemIsolationMode>,
     pub allowed_mounts: Vec<String>,
+    /// v2.1.181: opt-in to let sandboxed commands send Apple Events on macOS.
+    pub allow_apple_events: Option<bool>,
+    /// v2.1.187: block sandboxed commands from reading credential files and
+    /// secret environment variables.
+    pub credentials: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -342,6 +347,8 @@ mod tests {
             network_isolation: Some(false),
             filesystem_mode: Some(FilesystemIsolationMode::WorkspaceOnly),
             allowed_mounts: vec!["logs".to_string()],
+            allow_apple_events: None,
+            credentials: None,
         };
 
         let request = config.resolve_request(

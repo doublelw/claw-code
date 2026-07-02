@@ -622,6 +622,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         } => {
             enforce_broad_cwd_policy(allow_broad_cwd, output_format)?;
             run_stale_base_preflight(base_commit.as_deref());
+            // v2.1.183: warn on stderr when the requested model is deprecated
+            // or auto-updated to a newer model.
+            if let Some(newer) = deprecated_model_replacement(&model) {
+                eprintln!(
+                    "Warning: model '{model}' is deprecated; it will be served as '{newer}'. \
+                     Update your model setting to silence this warning."
+                );
+            }
             // Only consume piped stdin as prompt context when the permission
             // mode is fully unattended. In modes where the permission
             // prompter may invoke CliPermissionPrompter::decide(), stdin
@@ -1962,11 +1970,29 @@ fn levenshtein_distance(left: &str, right: &str) -> usize {
 fn resolve_model_alias(model: &str) -> &str {
     match model {
         "opus" => "anthropic/claude-opus-4-6",
-        "sonnet" => "anthropic/claude-sonnet-4-6",
+        // v2.1.197: Sonnet 5 is now the default Sonnet with native 1M context.
+        "sonnet" => "anthropic/claude-sonnet-5",
         "haiku" => "anthropic/claude-haiku-4-5-20251213",
         "fable" | "fable5" => "anthropic/claude-fable-5",
         _ => model,
     }
+}
+
+/// v2.1.183: detect deprecated / superseded model ids and return the newer
+/// model they were auto-updated to (or `None` if the model is current).
+/// Used to emit a deprecation warning on stderr in `-p` mode.
+#[must_use]
+pub fn deprecated_model_replacement(model: &str) -> Option<&'static str> {
+    let lower = model.to_ascii_lowercase();
+    // Old Sonnet 4.x ids → Sonnet 5 (v2.1.197 default)
+    if lower.contains("claude-sonnet-4") || lower == "sonnet-4" {
+        return Some("anthropic/claude-sonnet-5");
+    }
+    // Old Opus 4.6 → 4.8 (Fast mode / current)
+    if lower == "claude-opus-4-6" || lower.ends_with("opus-4-6") {
+        return Some("anthropic/claude-opus-4-8");
+    }
+    None
 }
 
 /// v2.1.170/173: Normalize model names.
@@ -12804,7 +12830,8 @@ mod tests {
     #[test]
     fn resolves_known_model_aliases() {
         assert_eq!(resolve_model_alias("opus"), "anthropic/claude-opus-4-6");
-        assert_eq!(resolve_model_alias("sonnet"), "anthropic/claude-sonnet-4-6");
+        // v2.1.197: sonnet alias now resolves to Sonnet 5
+        assert_eq!(resolve_model_alias("sonnet"), "anthropic/claude-sonnet-5");
         assert_eq!(
             resolve_model_alias("haiku"),
             "anthropic/claude-haiku-4-5-20251213"
@@ -17245,7 +17272,8 @@ mod dump_manifests_tests {
 #[cfg(test)]
 mod alias_resolution_tests {
     use super::{
-        is_fable_5, normalize_model_name, resolve_model_alias_with_config, validate_model_syntax,
+        deprecated_model_replacement, is_fable_5, normalize_model_name,
+        resolve_model_alias_with_config, validate_model_syntax,
     };
 
     #[test]
@@ -17257,7 +17285,7 @@ mod alias_resolution_tests {
         );
         assert_eq!(
             resolve_model_alias_with_config("sonnet"),
-            "anthropic/claude-sonnet-4-6"
+            "anthropic/claude-sonnet-5"
         );
         assert_eq!(
             resolve_model_alias_with_config("haiku"),
@@ -17335,6 +17363,44 @@ mod alias_resolution_tests {
         assert_eq!(
             resolve_model_alias_with_config("fable-5[1m]"),
             "anthropic/claude-fable-5"
+        );
+    }
+
+    // --- v2.1.183: deprecated model detection ---
+
+    #[test]
+    fn detects_deprecated_sonnet_4() {
+        assert_eq!(
+            deprecated_model_replacement("anthropic/claude-sonnet-4-6"),
+            Some("anthropic/claude-sonnet-5")
+        );
+        assert_eq!(
+            deprecated_model_replacement("claude-sonnet-4-5"),
+            Some("anthropic/claude-sonnet-5")
+        );
+    }
+
+    #[test]
+    fn detects_deprecated_opus_4_6() {
+        assert_eq!(
+            deprecated_model_replacement("anthropic/claude-opus-4-6"),
+            Some("anthropic/claude-opus-4-8")
+        );
+    }
+
+    #[test]
+    fn current_models_not_deprecated() {
+        assert_eq!(
+            deprecated_model_replacement("anthropic/claude-sonnet-5"),
+            None
+        );
+        assert_eq!(
+            deprecated_model_replacement("anthropic/claude-fable-5"),
+            None
+        );
+        assert_eq!(
+            deprecated_model_replacement("anthropic/claude-opus-4-8"),
+            None
         );
     }
 }

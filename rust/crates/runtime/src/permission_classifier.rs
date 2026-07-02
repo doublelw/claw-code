@@ -22,13 +22,25 @@ pub enum Classification {
 
 pub struct PermissionClassifier {
     workspace_root: Option<String>,
+    /// v2.1.183: when true, destructive VCS/IaC commands (git reset --hard,
+    /// terraform destroy, etc.) bypass the safety block. Set when the user
+    /// explicitly asked to discard local work or destroy a stack.
+    allow_destructive_vcs: bool,
 }
 
 impl PermissionClassifier {
     pub fn new(workspace_root: Option<&Path>) -> Self {
         Self {
             workspace_root: workspace_root.map(|p| p.to_string_lossy().to_string()),
+            allow_destructive_vcs: false,
         }
+    }
+
+    /// v2.1.183: opt in to destructive VCS/IaC commands for this classifier.
+    #[must_use]
+    pub fn with_destructive_vcs_allowed(mut self, allowed: bool) -> Self {
+        self.allow_destructive_vcs = allowed;
+        self
     }
 
     pub fn classify(&self, tool_name: &str, input: &str) -> Classification {
@@ -129,7 +141,37 @@ impl PermissionClassifier {
             }
         }
 
+        // v2.1.183: destructive version-control / IaC commands are blocked by
+        // default. The agent must have been explicitly asked to discard local
+        // work, amend a session-made commit, or destroy a specific stack.
+        // These surface as Deny unless the caller opts in via the
+        // `allow_destructive_vcs` escape hatch.
+        if !self.allow_destructive_vcs && Self::is_destructive_vcs_command(trimmed) {
+            return Classification::Deny;
+        }
+
         Classification::Prompt
+    }
+
+    /// v2.1.183: detect commands that discard local work or destroy
+    /// infrastructure. These match Claude Code's auto-mode safety list.
+    fn is_destructive_vcs_command(trimmed: &str) -> bool {
+        let destructive_vcs = [
+            // git: discard uncommitted work
+            "git reset --hard",
+            "git checkout -- .",
+            "git checkout --",
+            "git clean -fd",
+            "git clean -fdx",
+            "git stash drop",
+            // git: rewrite history not made by the agent this session
+            "git commit --amend",
+            // IaC destroyers (must name the specific stack to be allowed)
+            "terraform destroy",
+            "pulumi destroy",
+            "cdk destroy",
+        ];
+        destructive_vcs.iter().any(|p| trimmed.contains(p))
     }
 
     fn classify_file_write(&self, input: &str) -> Classification {
@@ -327,6 +369,83 @@ mod tests {
     fn unknown_tool_prompts() {
         assert_eq!(
             classifier().classify("UnknownTool", "{}"),
+            Classification::Prompt
+        );
+    }
+
+    // --- v2.1.183: destructive VCS / IaC safety ---
+
+    #[test]
+    fn bash_destructive_git_reset_hard_blocked() {
+        assert_eq!(
+            classifier().classify("bash", r#"{"command":"git reset --hard HEAD~1"}"#),
+            Classification::Deny
+        );
+    }
+
+    #[test]
+    fn bash_destructive_git_clean_blocked() {
+        assert_eq!(
+            classifier().classify("bash", r#"{"command":"git clean -fd"}"#),
+            Classification::Deny
+        );
+    }
+
+    #[test]
+    fn bash_destructive_git_commit_amend_blocked() {
+        assert_eq!(
+            classifier().classify("bash", r#"{"command":"git commit --amend --no-edit"}"#),
+            Classification::Deny
+        );
+    }
+
+    #[test]
+    fn bash_destructive_terraform_destroy_blocked() {
+        assert_eq!(
+            classifier().classify("bash", r#"{"command":"terraform destroy -auto-approve"}"#),
+            Classification::Deny
+        );
+    }
+
+    #[test]
+    fn bash_destructive_pulumi_cdk_destroy_blocked() {
+        assert_eq!(
+            classifier().classify("bash", r#"{"command":"pulumi destroy --yes"}"#),
+            Classification::Deny
+        );
+        assert_eq!(
+            classifier().classify("bash", r#"{"command":"cdk destroy --force"}"#),
+            Classification::Deny
+        );
+    }
+
+    #[test]
+    fn bash_destructive_git_stash_drop_blocked() {
+        assert_eq!(
+            classifier().classify("bash", r#"{"command":"git stash drop stash@{0}"}"#),
+            Classification::Deny
+        );
+    }
+
+    #[test]
+    fn bash_destructive_vcs_allowed_when_opted_in() {
+        let permissive = classifier().with_destructive_vcs_allowed(true);
+        assert_eq!(
+            permissive.classify("bash", r#"{"command":"git reset --hard"}"#),
+            Classification::Prompt
+        );
+    }
+
+    #[test]
+    fn bash_non_destructive_git_not_blocked() {
+        // Regular git operations still allowed/prompted, not caught by the
+        // destructive VCS guard.
+        assert_eq!(
+            classifier().classify("bash", r#"{"command":"git reset"}"#),
+            Classification::Prompt
+        );
+        assert_eq!(
+            classifier().classify("bash", r#"{"command":"git commit -m msg"}"#),
             Classification::Prompt
         );
     }

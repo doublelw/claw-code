@@ -2120,7 +2120,7 @@ fn parse_permission_mode_arg(value: &str) -> Result<PermissionMode, String> {
     normalize_permission_mode(value)
         .ok_or_else(|| {
             format!(
-                "invalid_flag_value: unsupported permission mode '{value}'.\nUsage: --permission-mode read-only|workspace-write|danger-full-access"
+                "invalid_flag_value: unsupported permission mode '{value}'.\nUsage: --permission-mode manual|read-only|workspace-write|danger-full-access"
             )
         })
         .map(permission_mode_from_label)
@@ -9135,7 +9135,9 @@ fn init_json_value(report: &crate::init::InitReport, message: &str) -> serde_jso
 
 fn normalize_permission_mode(mode: &str) -> Option<&'static str> {
     match mode.trim() {
-        "read-only" => Some("read-only"),
+        // v2.1.200: "manual" (new default) and legacy "default"/"plan" map to
+        // read-only — the closest claw-code equivalent to manual approval.
+        "read-only" | "manual" | "default" | "plan" => Some("read-only"),
         "workspace-write" => Some("workspace-write"),
         "danger-full-access" => Some("danger-full-access"),
         _ => None,

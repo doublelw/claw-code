@@ -97,6 +97,9 @@ pub struct RuntimeFeatureConfig {
     attribution_session_url: bool,
     /// v2.1.193: route all Bash/PowerShell through the auto-mode classifier.
     auto_mode_classify_all_shell: bool,
+    /// v2.1.202: advisory guideline for dynamic workflow agent counts.
+    /// "small"/"medium"/"large" map to suggested chunk sizes.
+    workflow_size: Option<String>,
 }
 
 /// Ordered chain of fallback model identifiers used when the primary
@@ -397,6 +400,7 @@ impl ConfigLoader {
                 &["autoMode", "classifyAllShell"],
             )
             .unwrap_or(false),
+            workflow_size: nested_string(&merged_value, &["workflow", "size"]).map(str::to_string),
         };
 
         Ok(RuntimeConfig {
@@ -489,6 +493,7 @@ impl ConfigLoader {
                 &["autoMode", "classifyAllShell"],
             )
             .unwrap_or(false),
+            workflow_size: nested_string(&merged_value, &["workflow", "size"]).map(str::to_string),
         };
 
         let config = RuntimeConfig {
@@ -662,6 +667,12 @@ impl RuntimeConfig {
         self.feature_config.auto_mode_classify_all_shell()
     }
 
+    /// v2.1.202: advisory workflow size ("small"/"medium"/"large").
+    #[must_use]
+    pub fn workflow_size(&self) -> Option<&str> {
+        self.feature_config.workflow_size()
+    }
+
     /// Merge config-level default trusted roots with per-call roots.
     ///
     /// Config roots are defaults and are kept first; per-call roots extend the
@@ -817,6 +828,12 @@ impl RuntimeFeatureConfig {
     #[must_use]
     pub fn auto_mode_classify_all_shell(&self) -> bool {
         self.auto_mode_classify_all_shell
+    }
+
+    /// v2.1.202: advisory workflow size ("small"/"medium"/"large").
+    #[must_use]
+    pub fn workflow_size(&self) -> Option<&str> {
+        self.workflow_size.as_deref()
     }
 
     /// Merge this config's default trusted roots with per-call roots.
@@ -1425,7 +1442,9 @@ fn parse_permission_mode_label(
     context: &str,
 ) -> Result<ResolvedPermissionMode, ConfigError> {
     match mode {
-        "default" | "plan" | "read-only" => Ok(ResolvedPermissionMode::ReadOnly),
+        // v2.1.200: "manual" is the new name for the old "default" mode;
+        // both are accepted alongside the legacy aliases.
+        "default" | "manual" | "plan" | "read-only" => Ok(ResolvedPermissionMode::ReadOnly),
         "acceptEdits" | "auto" | "workspace-write" => Ok(ResolvedPermissionMode::WorkspaceWrite),
         "dontAsk" | "danger-full-access" => Ok(ResolvedPermissionMode::DangerFullAccess),
         other => Err(ConfigError::Parse(format!(
@@ -1689,6 +1708,19 @@ fn nested_bool(root: &JsonValue, path: &[&str]) -> Option<bool> {
     for (i, key) in path.iter().enumerate() {
         if i + 1 == path.len() {
             return current.get(*key)?.as_bool();
+        }
+        current = current.get(*key)?.as_object()?;
+    }
+    None
+}
+
+/// Read a string from a nested object path, e.g. ["workflow","size"].
+/// Used for v2.1.202 nested settings.
+fn nested_string<'a>(root: &'a JsonValue, path: &[&str]) -> Option<&'a str> {
+    let mut current = root.as_object()?;
+    for (i, key) in path.iter().enumerate() {
+        if i + 1 == path.len() {
+            return current.get(*key)?.as_str();
         }
         current = current.get(*key)?.as_object()?;
     }
@@ -3032,6 +3064,46 @@ mod tests {
         assert_eq!(loaded.sandbox().credentials, Some(false));
 
         fs::remove_dir_all(root).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn parses_v2200_v2202_settings() {
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let home = root.join("home").join(".claw");
+        fs::create_dir_all(&home).expect("home config dir");
+        fs::create_dir_all(&cwd).expect("project dir");
+        fs::write(
+            home.join("settings.json"),
+            r#"{
+                "permissions": {"defaultMode": "manual"},
+                "workflow": {"size": "large"}
+            }"#,
+        )
+        .expect("write settings");
+
+        let loaded = ConfigLoader::new(&cwd, &home)
+            .load()
+            .expect("config should load");
+        // v2.1.200: "manual" accepted as permission mode
+        assert_eq!(
+            loaded.permission_mode(),
+            Some(ResolvedPermissionMode::ReadOnly)
+        );
+        // v2.1.202: workflow size advisory
+        assert_eq!(loaded.workflow_size(), Some("large"));
+
+        fs::remove_dir_all(root).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn workflow_size_maps_to_agent_count() {
+        // v2.1.202: WorkflowScript::size_to_agent_count
+        use crate::WorkflowScript;
+        assert_eq!(WorkflowScript::size_to_agent_count("small"), Some(3));
+        assert_eq!(WorkflowScript::size_to_agent_count("Medium"), Some(8));
+        assert_eq!(WorkflowScript::size_to_agent_count("LARGE"), Some(16));
+        assert_eq!(WorkflowScript::size_to_agent_count("huge"), None);
     }
 
     #[test]

@@ -204,6 +204,18 @@ final_report"#
         )
     }
 
+    /// v2.1.202: map an advisory workflow size label to a suggested agent count.
+    /// Returns None for unrecognized labels so callers keep their default.
+    #[must_use]
+    pub fn size_to_agent_count(size: &str) -> Option<usize> {
+        match size.trim().to_ascii_lowercase().as_str() {
+            "small" => Some(3),
+            "medium" => Some(8),
+            "large" => Some(16),
+            _ => None,
+        }
+    }
+
     /// Task decomposition — splits a large task into small parallel subtasks,
     /// collects results, merges with dedup, and runs QA check.
     pub fn decompose_template(task: &str, max_chunks: usize) -> String {

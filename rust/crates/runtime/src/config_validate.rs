@@ -257,7 +257,16 @@ const TOP_LEVEL_FIELDS: &[FieldSpec] = &[
         name: "autoMode",
         expected: FieldType::Object,
     },
+    FieldSpec {
+        name: "workflow",
+        expected: FieldType::Object,
+    },
 ];
+
+const WORKFLOW_FIELDS: &[FieldSpec] = &[FieldSpec {
+    name: "size",
+    expected: FieldType::String,
+}];
 
 const ATTRIBUTION_FIELDS: &[FieldSpec] = &[FieldSpec {
     name: "sessionUrl",
@@ -658,6 +667,16 @@ pub fn validate_config_file(
             auto_mode,
             AUTO_MODE_FIELDS,
             "autoMode",
+            source,
+            &path_display,
+        ));
+    }
+    // v2.1.202 workflow settings
+    if let Some(workflow) = object.get("workflow").and_then(JsonValue::as_object) {
+        result.merge(validate_object_keys(
+            workflow,
+            WORKFLOW_FIELDS,
+            "workflow",
             source,
             &path_display,
         ));

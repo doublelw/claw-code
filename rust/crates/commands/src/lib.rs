@@ -2845,8 +2845,44 @@ pub fn classify_skills_slash_command(args: Option<&str>) -> SkillSlashDispatch {
         {
             SkillSlashDispatch::Local
         }
-        Some(args) => SkillSlashDispatch::Invoke(format!("${}", args.trim_start_matches('/'))),
+        Some(args) => {
+            // v2.1.199: stacked slash-skill invocations. When the args contain
+            // multiple leading `/skill-name` tokens (e.g. `/skill-a /skill-b do
+            // XYZ`), prefix EACH leading skill name with `$` so all are loaded
+            // (up to 5), not just the first.
+            let trimmed = args.trim();
+            let prompt = stack_skill_prefixes(trimmed);
+            SkillSlashDispatch::Invoke(prompt)
+        }
     }
+}
+
+/// v2.1.199: prepend `$` to each leading skill-name token (up to 5).
+/// Tokens are skill names while they start with `/` (or are bare identifiers
+/// in a `/skills a b ...` form). Stops at the first non-skill token so the
+/// remaining args are passed through unchanged.
+fn stack_skill_prefixes(args: &str) -> String {
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    let mut out: Vec<String> = Vec::new();
+    let mut skill_count = 0;
+    let mut consumed_skill_section = true;
+    for part in &parts {
+        if consumed_skill_section && skill_count < 5 && part.starts_with('/') {
+            // stacked `/skill-b` token — strip the leading slash and prefix `$`
+            out.push(format!("${}", part.trim_start_matches('/')));
+            skill_count += 1;
+        } else if consumed_skill_section && skill_count < 5 && out.is_empty() {
+            // first token in a `/skills <name>` form (no leading slash) — the
+            // skill name, prefixed with `$`.
+            out.push(format!("${part}"));
+            skill_count += 1;
+            consumed_skill_section = false;
+        } else {
+            consumed_skill_section = false;
+            out.push((*part).to_string());
+        }
+    }
+    out.join(" ")
 }
 
 /// Resolve a skill invocation by validating the skill exists on disk before
@@ -5286,6 +5322,36 @@ mod tests {
     fn cd_command_appears_in_help() {
         let help = render_slash_command_help();
         assert!(help.contains("/cd"));
+    }
+
+    // --- v2.1.199: stacked slash-skill invocations ---
+
+    #[test]
+    fn stacks_multiple_leading_skills() {
+        let dispatch = classify_skills_slash_command(Some("/skill-a /skill-b do XYZ"));
+        let SkillSlashDispatch::Invoke(prompt) = dispatch else {
+            panic!("expected invoke");
+        };
+        assert_eq!(prompt, "$skill-a $skill-b do XYZ");
+    }
+
+    #[test]
+    fn caps_stacked_skills_at_five() {
+        let dispatch = classify_skills_slash_command(Some("/a /b /c /d /e /f /g remaining"));
+        let SkillSlashDispatch::Invoke(prompt) = dispatch else {
+            panic!("expected invoke");
+        };
+        // only 5 leading skills get the `$` prefix; the 6th+ are passed through
+        assert_eq!(prompt, "$a $b $c $d $e /f /g remaining");
+    }
+
+    #[test]
+    fn single_skill_unchanged() {
+        let dispatch = classify_skills_slash_command(Some("my-skill do thing"));
+        let SkillSlashDispatch::Invoke(prompt) = dispatch else {
+            panic!("expected invoke");
+        };
+        assert_eq!(prompt, "$my-skill do thing");
     }
 
     #[test]

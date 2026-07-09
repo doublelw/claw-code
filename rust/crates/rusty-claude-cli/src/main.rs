@@ -5725,6 +5725,14 @@ impl LiveCli {
             || "unknown".to_string(),
             |context| context.git_summary.headline(),
         );
+        // v2.1.203: surface the active permission mode label, including the
+        // manual-approval badge when the resolved mode came from a manual-style
+        // keyword, so the active approval mode is always visible.
+        let raw_permission_label = env::var("CLAW_PERMISSION_MODE")
+            .or_else(|_| env::var("PERMISSION_MODE"))
+            .ok();
+        let permission_display =
+            permission_mode_display(raw_permission_label.as_deref(), self.permission_mode);
         let session_path = self.session.path.strip_prefix(Path::new(&cwd)).map_or_else(
             |_| self.session.path.display().to_string(),
             |path| path.display().to_string(),
@@ -5746,7 +5754,7 @@ impl LiveCli {
   \x1b[2mAuto-save\x1b[0m        {}\n\n\
   Type \x1b[1m/help\x1b[0m for commands · \x1b[1m/status\x1b[0m for live context · \x1b[2m/resume latest\x1b[0m jumps back to the newest session · \x1b[1m/diff\x1b[0m then \x1b[1m/commit\x1b[0m to ship · \x1b[2mTab\x1b[0m for workflow completions · \x1b[2mShift+Enter\x1b[0m for newline",
             self.model,
-            self.permission_mode.as_str(),
+            permission_display,
             git_branch,
             workspace,
             cwd,
@@ -9142,6 +9150,21 @@ fn normalize_permission_mode(mode: &str) -> Option<&'static str> {
         "danger-full-access" => Some("danger-full-access"),
         _ => None,
     }
+}
+
+/// v2.1.203: format the permission mode for always-visible display. When the
+/// raw label is a manual-style mode, surface the "⏸ manual" badge so the
+/// active approval mode is unambiguous (claw-code maps manual→read-only, so
+/// the raw label would otherwise be lost).
+#[must_use]
+pub fn permission_mode_display(raw_label: Option<&str>, mode: PermissionMode) -> String {
+    if let Some(label) = raw_label {
+        let trimmed = label.trim().to_ascii_lowercase();
+        if matches!(trimmed.as_str(), "manual" | "default" | "plan") {
+            return format!("⏸ manual ({})", mode.as_str());
+        }
+    }
+    mode.as_str().to_string()
 }
 
 fn render_diff_report() -> Result<String, Box<dyn std::error::Error>> {
@@ -17275,7 +17298,7 @@ mod dump_manifests_tests {
 mod alias_resolution_tests {
     use super::{
         deprecated_model_replacement, is_fable_5, normalize_model_name,
-        resolve_model_alias_with_config, validate_model_syntax,
+        permission_mode_display, resolve_model_alias_with_config, validate_model_syntax,
     };
 
     #[test]
@@ -17403,6 +17426,39 @@ mod alias_resolution_tests {
         assert_eq!(
             deprecated_model_replacement("anthropic/claude-opus-4-8"),
             None
+        );
+    }
+
+    // --- v2.1.203: manual mode visibility ---
+
+    #[test]
+    fn manual_mode_display_shows_badge() {
+        use crate::PermissionMode;
+        assert_eq!(
+            permission_mode_display(Some("manual"), PermissionMode::ReadOnly),
+            "⏸ manual (read-only)"
+        );
+        assert_eq!(
+            permission_mode_display(Some("default"), PermissionMode::ReadOnly),
+            "⏸ manual (read-only)"
+        );
+    }
+
+    #[test]
+    fn non_manual_mode_display_plain() {
+        use crate::PermissionMode;
+        assert_eq!(
+            permission_mode_display(None, PermissionMode::WorkspaceWrite),
+            "workspace-write"
+        );
+        assert_eq!(
+            permission_mode_display(Some("danger-full-access"), PermissionMode::DangerFullAccess),
+            "danger-full-access"
+        );
+        // explicit read-only label is not a manual keyword
+        assert_eq!(
+            permission_mode_display(Some("read-only"), PermissionMode::ReadOnly),
+            "read-only"
         );
     }
 }

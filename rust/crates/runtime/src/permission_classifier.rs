@@ -67,6 +67,13 @@ impl PermissionClassifier {
         let lower = command.to_ascii_lowercase();
         let trimmed = lower.trim();
 
+        // v2.1.205: block any command that targets a session transcript file,
+        // checked first so read-only-looking prefixes (e.g. `echo x > ...`) can't
+        // smuggle a transcript rewrite past the guard.
+        if Self::targets_session_transcript(trimmed) {
+            return Classification::Deny;
+        }
+
         let read_only_prefixes = [
             "cat ",
             "head ",
@@ -195,6 +202,13 @@ impl PermissionClassifier {
             }
         }
 
+        // v2.1.205: block tampering with session transcript files. The agent
+        // must never rewrite its own conversation log — that would let it
+        // rewrite history, hide tool calls, or corrupt the audit trail.
+        if Self::targets_session_transcript(&lower) {
+            return Classification::Deny;
+        }
+
         if self.workspace_root.is_some() {
             if lower.contains("../") || lower.contains("..\\") {
                 return Classification::Deny;
@@ -202,6 +216,16 @@ impl PermissionClassifier {
         }
 
         Classification::Allow
+    }
+
+    /// v2.1.205: detect paths/inputs targeting a session transcript file.
+    /// claw-code stores transcripts under `.claw/sessions/<id>/session-*.jsonl`
+    /// (and the Claude-compatible `.claude/sessions/...`). Any write/edit to a
+    /// `session-*.jsonl` inside a `sessions/` directory is treated as tampering.
+    fn targets_session_transcript(lower: &str) -> bool {
+        (lower.contains("/sessions/") || lower.contains("\\sessions\\"))
+            && lower.contains("session-")
+            && lower.contains(".jsonl")
     }
 }
 
@@ -447,6 +471,64 @@ mod tests {
         assert_eq!(
             classifier().classify("bash", r#"{"command":"git commit -m msg"}"#),
             Classification::Prompt
+        );
+    }
+
+    // --- v2.1.205: session transcript tampering blocker ---
+
+    #[test]
+    fn write_to_session_transcript_blocked() {
+        assert_eq!(
+            classifier().classify(
+                "write_file",
+                r#"{"path":".claw/sessions/abc123/session-1234.jsonl","content":"x"}"#,
+            ),
+            Classification::Deny
+        );
+    }
+
+    #[test]
+    fn edit_to_session_transcript_blocked() {
+        assert_eq!(
+            classifier().classify(
+                "edit_file",
+                r#"{"path":".claude/sessions/s1/session-9.jsonl"}"#,
+            ),
+            Classification::Deny
+        );
+    }
+
+    #[test]
+    fn bash_writing_to_transcript_blocked() {
+        assert_eq!(
+            classifier().classify(
+                "bash",
+                r#"{"command":"echo x > .claw/sessions/abc/session-1.jsonl"}"#,
+            ),
+            Classification::Deny
+        );
+    }
+
+    #[test]
+    fn non_transcript_jsonl_allowed() {
+        // A random .jsonl data file is not a session transcript.
+        assert_eq!(
+            classifier().classify(
+                "write_file",
+                r#"{"path":"data/exports/log.jsonl","content":"{}"}"#,
+            ),
+            Classification::Allow
+        );
+    }
+
+    #[test]
+    fn normal_workspace_write_still_allowed() {
+        assert_eq!(
+            classifier().classify(
+                "write_file",
+                r#"{"path":"src/main.rs","content":"fn main(){}"}"#,
+            ),
+            Classification::Allow
         );
     }
 }

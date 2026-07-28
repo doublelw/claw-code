@@ -1,5 +1,9 @@
 use std::path::Path;
 
+/// v2.1.214: bash commands longer than this (in bytes) always prompt for
+/// approval — the prefix analyzer cannot safely judge them.
+const MAX_AUTO_BASH_COMMAND_LEN: usize = 10_000;
+
 fn extract_json_field(input: &str, field: &str) -> Option<String> {
     let pattern = format!("\"{}\":", field);
     let start = input.find(&pattern)?;
@@ -72,6 +76,12 @@ impl PermissionClassifier {
         // smuggle a transcript rewrite past the guard.
         if Self::targets_session_transcript(trimmed) {
             return Classification::Deny;
+        }
+
+        // v2.1.214: very long commands are too complex for the prefix analyzer
+        // to judge safely — always prompt instead of auto-approving.
+        if command.len() > MAX_AUTO_BASH_COMMAND_LEN {
+            return Classification::Prompt;
         }
 
         let read_only_prefixes = [
@@ -528,6 +538,28 @@ mod tests {
                 "write_file",
                 r#"{"path":"src/main.rs","content":"fn main(){}"}"#,
             ),
+            Classification::Allow
+        );
+    }
+
+    // --- v2.1.214: bash command length guard ---
+
+    #[test]
+    fn very_long_bash_command_always_prompts() {
+        // A >10k-char command, even starting with a read-only prefix, must
+        // prompt instead of being auto-approved.
+        let long_cat = format!("{{\"command\":\"cat {}\"}}", "x".repeat(11_000));
+        assert_eq!(
+            classifier().classify("bash", &long_cat),
+            Classification::Prompt
+        );
+    }
+
+    #[test]
+    fn short_bash_command_still_classified() {
+        // Under the limit, normal classification applies.
+        assert_eq!(
+            classifier().classify("bash", r#"{"command":"cat README.md"}"#),
             Classification::Allow
         );
     }

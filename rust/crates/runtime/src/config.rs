@@ -100,6 +100,12 @@ pub struct RuntimeFeatureConfig {
     /// v2.1.202: advisory guideline for dynamic workflow agent counts.
     /// "small"/"medium"/"large" map to suggested chunk sizes.
     workflow_size: Option<String>,
+    /// v2.1.212: session-wide cap on WebSearch tool calls (stops runaway
+    /// search loops). 0 = unlimited.
+    max_web_searches_per_session: u32,
+    /// v2.1.212: per-session cap on subagent spawns (stops runaway delegation).
+    /// 0 = unlimited.
+    max_subagents_per_session: u32,
 }
 
 /// Ordered chain of fallback model identifiers used when the primary
@@ -401,6 +407,14 @@ impl ConfigLoader {
             )
             .unwrap_or(false),
             workflow_size: nested_string(&merged_value, &["workflow", "size"]).map(str::to_string),
+            max_web_searches_per_session: session_cap_from_env(
+                "CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION",
+                200,
+            ),
+            max_subagents_per_session: session_cap_from_env(
+                "CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION",
+                200,
+            ),
         };
 
         Ok(RuntimeConfig {
@@ -494,6 +508,14 @@ impl ConfigLoader {
             )
             .unwrap_or(false),
             workflow_size: nested_string(&merged_value, &["workflow", "size"]).map(str::to_string),
+            max_web_searches_per_session: session_cap_from_env(
+                "CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION",
+                200,
+            ),
+            max_subagents_per_session: session_cap_from_env(
+                "CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION",
+                200,
+            ),
         };
 
         let config = RuntimeConfig {
@@ -673,6 +695,18 @@ impl RuntimeConfig {
         self.feature_config.workflow_size()
     }
 
+    /// v2.1.212: session WebSearch cap (0 = unlimited).
+    #[must_use]
+    pub fn max_web_searches_per_session(&self) -> u32 {
+        self.feature_config.max_web_searches_per_session()
+    }
+
+    /// v2.1.212: per-session subagent spawn cap (0 = unlimited).
+    #[must_use]
+    pub fn max_subagents_per_session(&self) -> u32 {
+        self.feature_config.max_subagents_per_session()
+    }
+
     /// Merge config-level default trusted roots with per-call roots.
     ///
     /// Config roots are defaults and are kept first; per-call roots extend the
@@ -834,6 +868,18 @@ impl RuntimeFeatureConfig {
     #[must_use]
     pub fn workflow_size(&self) -> Option<&str> {
         self.workflow_size.as_deref()
+    }
+
+    /// v2.1.212: session WebSearch cap (0 = unlimited).
+    #[must_use]
+    pub fn max_web_searches_per_session(&self) -> u32 {
+        self.max_web_searches_per_session
+    }
+
+    /// v2.1.212: per-session subagent spawn cap (0 = unlimited).
+    #[must_use]
+    pub fn max_subagents_per_session(&self) -> u32 {
+        self.max_subagents_per_session
     }
 
     /// Merge this config's default trusted roots with per-call roots.
@@ -1725,6 +1771,18 @@ fn nested_string<'a>(root: &'a JsonValue, path: &[&str]) -> Option<&'a str> {
         current = current.get(*key)?.as_object()?;
     }
     None
+}
+
+/// v2.1.212: read a per-session runaway cap from an env var, falling back to
+/// `default`. `0` means unlimited. Used for WebSearch / subagent caps.
+fn session_cap_from_env(var: &str, default: u32) -> u32 {
+    match std::env::var(var)
+        .ok()
+        .and_then(|v| v.trim().parse::<u32>().ok())
+    {
+        Some(n) => n,
+        None => default,
+    }
 }
 
 fn optional_bool(
@@ -3104,6 +3162,24 @@ mod tests {
         assert_eq!(WorkflowScript::size_to_agent_count("Medium"), Some(8));
         assert_eq!(WorkflowScript::size_to_agent_count("LARGE"), Some(16));
         assert_eq!(WorkflowScript::size_to_agent_count("huge"), None);
+    }
+
+    #[test]
+    fn session_caps_default_to_200() {
+        // v2.1.212: runaway caps default to 200 when env unset.
+        // (Env may be set in CI; just assert a sane positive default.)
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let home = root.join("home").join(".claw");
+        fs::create_dir_all(&home).expect("home config dir");
+        fs::create_dir_all(&cwd).expect("project dir");
+        fs::write(home.join("settings.json"), "{}").expect("write settings");
+        let loaded = ConfigLoader::new(&cwd, &home)
+            .load()
+            .expect("config should load");
+        assert!(loaded.max_web_searches_per_session() > 0);
+        assert!(loaded.max_subagents_per_session() > 0);
+        fs::remove_dir_all(root).expect("cleanup");
     }
 
     #[test]

@@ -481,6 +481,41 @@ fn extract_tool_param(input: &str, key: &str) -> Option<String> {
     }
 }
 
+/// v2.1.211: neutralize a tool-input string for display in permission previews.
+/// Strips Unicode bidi-control / zero-width / format characters and replaces
+/// look-alike quotation marks with ASCII equivalents, so a malicious tool input
+/// cannot visually alter the approval message (e.g. hide a `rm -rf` behind a
+/// RTL override). The returned string is safe to show to the user as the
+/// canonical representation of what will run.
+#[must_use]
+pub fn neutralize_tool_input_preview(input: &str) -> String {
+    input
+        .chars()
+        .filter(|&c| !is_unicode_bidi_or_invisible(c))
+        .map(|c| match c {
+            '\u{2018}' | '\u{2019}' | '\u{201A}' | '\u{201B}' => '\'',
+            '\u{201C}' | '\u{201D}' | '\u{201E}' | '\u{201F}' => '"',
+            other => other,
+        })
+        .collect()
+}
+
+/// v2.1.211: true for Unicode characters that can hide or reorder visible text
+/// in a terminal: bidi controls, zero-width joiners/spaces, and format chars.
+fn is_unicode_bidi_or_invisible(c: char) -> bool {
+    matches!(
+        c,
+        // Bidi control
+        '\u{202A}' | '\u{202B}' | '\u{202C}' | '\u{202D}' | '\u{202E}' | // LRE/RLE/PDF/LRO/RLO
+        '\u{2066}' | '\u{2067}' | '\u{2068}' | '\u{2069}' | // LRI/RLI/FSI/PDI
+        '\u{200E}' | '\u{200F}' | // LRM/RSM
+        // Zero-width / format
+        '\u{200B}' | '\u{200C}' | '\u{200D}' | // ZWSP/ZWNJ/ZWJ
+        '\u{2060}' | '\u{FEFF}' | // WJ / BOM
+        '\u{00AD}' // soft hyphen
+    )
+}
+
 fn unescape_rule_content(content: &str) -> String {
     content
         .replace(r"\(", "(")
@@ -551,8 +586,9 @@ fn extract_permission_subject(input: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        PermissionContext, PermissionMode, PermissionOutcome, PermissionOverride, PermissionPolicy,
-        PermissionPromptDecision, PermissionPrompter, PermissionRequest,
+        neutralize_tool_input_preview, PermissionContext, PermissionMode, PermissionOutcome,
+        PermissionOverride, PermissionPolicy, PermissionPromptDecision, PermissionPrompter,
+        PermissionRequest,
     };
     use crate::config::RuntimePermissionRuleConfig;
 
@@ -755,6 +791,35 @@ mod tests {
             policy.authorize("bash", r#"{"command":"git status"}"#, None),
             PermissionOutcome::Allow
         );
+    }
+
+    // --- v2.1.211: permission preview unicode neutralization ---
+
+    #[test]
+    fn neutralize_strips_bidi_override() {
+        // RLO (U+202E) reverses visible text order — must be removed.
+        let malicious = "echo \u{202E}safe";
+        assert_eq!(neutralize_tool_input_preview(malicious), "echo safe");
+    }
+
+    #[test]
+    fn neutralize_strips_zero_width_chars() {
+        let with_zwj = "rm\u{200D} -rf /";
+        assert_eq!(neutralize_tool_input_preview(with_zwj), "rm -rf /");
+        let with_zwsp = "cat\u{200B}.env";
+        assert_eq!(neutralize_tool_input_preview(with_zwsp), "cat.env");
+    }
+
+    #[test]
+    fn neutralize_replaces_lookalike_quotes() {
+        // Curly quotes that could spoof ASCII quotes in an approval display.
+        let input = "echo \u{201C}hello\u{201D}";
+        assert_eq!(neutralize_tool_input_preview(input), "echo \"hello\"");
+    }
+
+    #[test]
+    fn neutralize_preserves_normal_text() {
+        assert_eq!(neutralize_tool_input_preview("ls -la src/"), "ls -la src/");
     }
 
     #[test]

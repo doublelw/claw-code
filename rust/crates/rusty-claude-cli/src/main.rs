@@ -1969,7 +1969,8 @@ fn levenshtein_distance(left: &str, right: &str) -> usize {
 
 fn resolve_model_alias(model: &str) -> &str {
     match model {
-        "opus" => "anthropic/claude-opus-4-6",
+        // v2.1.219: Opus 5 is now the default Opus model (1M context, fast mode).
+        "opus" => "anthropic/claude-opus-5",
         // v2.1.197: Sonnet 5 is now the default Sonnet with native 1M context.
         "sonnet" => "anthropic/claude-sonnet-5",
         "haiku" => "anthropic/claude-haiku-4-5-20251213",
@@ -1988,9 +1989,13 @@ pub fn deprecated_model_replacement(model: &str) -> Option<&'static str> {
     if lower.contains("claude-sonnet-4") || lower == "sonnet-4" {
         return Some("anthropic/claude-sonnet-5");
     }
-    // Old Opus 4.6 → 4.8 (Fast mode / current)
-    if lower == "claude-opus-4-6" || lower.ends_with("opus-4-6") {
-        return Some("anthropic/claude-opus-4-8");
+    // Old Opus 4.x ids → Opus 5 (v2.1.219 default Opus)
+    if lower.contains("claude-opus-4")
+        || lower == "opus-4"
+        || lower == "claude-opus"
+        || lower.ends_with("opus-4-6")
+    {
+        return Some("anthropic/claude-opus-5");
     }
     None
 }
@@ -5811,8 +5816,12 @@ impl LiveCli {
             || lower.contains("workflow:")
             || lower.contains("run workflow")
             || lower.contains("use a workflow");
-        if lower.contains("ultracode")
-            || lower.contains("ultra code")
+        // v2.1.210: the ultracode keyword opt-in must NOT fire on non-human
+        // input (webhook payloads, relayed PR comments). Explicit workflow /
+        // deep-research phrases are unaffected.
+        let ultracode_intent = (lower.contains("ultracode") || lower.contains("ultra code"))
+            && !looks_non_human(input);
+        if ultracode_intent
             || lower.contains("deep research")
             || lower.contains("deep-research")
             || explicit_workflow
@@ -7598,11 +7607,38 @@ impl LiveCli {
 
 fn should_trigger_workflow(user_message: &str, effort: &runtime::EffortLevel) -> bool {
     let lower = user_message.to_lowercase();
+    // v2.1.210: keyword opt-in does not fire on non-human input; the effort
+    // level (set by a human via /effort) is an authoritative signal.
+    let keyword_intent = (lower.contains("ultracode") || lower.contains("ultra code"))
+        && !looks_non_human(user_message);
     effort == &runtime::EffortLevel::Ultracode
-        || lower.contains("ultracode")
-        || lower.contains("ultra code")
+        || keyword_intent
         || lower.contains("deep research")
         || lower.contains("deep-research")
+}
+
+/// v2.1.210: detect non-human-originated input (webhook payloads, relayed PR
+/// comments) so the ultracode keyword opt-in doesn't auto-fire on it.
+#[must_use]
+pub fn looks_non_human(input: &str) -> bool {
+    let trimmed = input.trim_start();
+    // Structured webhook / event payloads begin with `{` or `<` and carry
+    // machine markers. Plain human prompts never start with a JSON object.
+    if trimmed.starts_with('{')
+        && (trimmed.contains("\"event\"")
+            || trimmed.contains("\"action\"")
+            || trimmed.contains("\"pull_request\"")
+            || trimmed.contains("\"webhook\"")
+            || trimmed.contains("\"comment\"")
+            || trimmed.contains("\"sender\""))
+    {
+        return true;
+    }
+    // Relayed CI / automation banners.
+    let lower = input.to_ascii_lowercase();
+    lower.contains("github.com/") && lower.contains("/pull/")
+        || lower.starts_with("[webhook]")
+        || lower.starts_with("[ci]")
 }
 
 fn sessions_dir() -> Result<PathBuf, Box<dyn std::error::Error>> {
@@ -12766,7 +12802,7 @@ mod tests {
             parse_args(&args).expect("args should parse"),
             CliAction::Prompt {
                 prompt: "explain this".to_string(),
-                model: "anthropic/claude-opus-4-6".to_string(),
+                model: "anthropic/claude-opus-5".to_string(),
                 output_format: CliOutputFormat::Json,
                 allowed_tools: None,
                 permission_mode: PermissionMode::DangerFullAccess,
@@ -12840,7 +12876,7 @@ mod tests {
             parse_args(&args).expect("args should parse"),
             CliAction::Prompt {
                 prompt: "explain this".to_string(),
-                model: "anthropic/claude-opus-4-6".to_string(),
+                model: "anthropic/claude-opus-5".to_string(),
                 output_format: CliOutputFormat::Text,
                 allowed_tools: None,
                 permission_mode: PermissionMode::DangerFullAccess,
@@ -12854,7 +12890,8 @@ mod tests {
 
     #[test]
     fn resolves_known_model_aliases() {
-        assert_eq!(resolve_model_alias("opus"), "anthropic/claude-opus-4-6");
+        // v2.1.219: opus alias now resolves to Opus 5
+        assert_eq!(resolve_model_alias("opus"), "anthropic/claude-opus-5");
         // v2.1.197: sonnet alias now resolves to Sonnet 5
         assert_eq!(resolve_model_alias("sonnet"), "anthropic/claude-sonnet-5");
         assert_eq!(
@@ -12897,7 +12934,7 @@ mod tests {
 
         // then
         assert_eq!(direct, "anthropic/claude-haiku-4-5-20251213");
-        assert_eq!(chained, "anthropic/claude-opus-4-6");
+        assert_eq!(chained, "anthropic/claude-opus-5");
         assert_eq!(cross_provider, "grok-3-mini");
         assert_eq!(unknown, "unknown-model");
         assert_eq!(builtin, "anthropic/claude-haiku-4-5-20251213");
@@ -13339,7 +13376,7 @@ mod tests {
                 ..
             } => {
                 assert_eq!(
-                    model, "anthropic/claude-sonnet-4-6",
+                    model, "anthropic/claude-sonnet-5",
                     "sonnet alias should resolve"
                 );
                 assert_eq!(
@@ -14503,7 +14540,7 @@ mod tests {
             .expect("prompt shorthand should still work"),
             CliAction::Prompt {
                 prompt: "please debug this".to_string(),
-                model: "anthropic/claude-opus-4-6".to_string(),
+                model: "anthropic/claude-opus-5".to_string(),
                 output_format: CliOutputFormat::Text,
                 allowed_tools: None,
                 permission_mode: crate::default_permission_mode(),
@@ -15022,7 +15059,7 @@ mod tests {
             vec!["session-old".to_string()],
         );
 
-        assert!(completions.contains(&"/model anthropic/claude-sonnet-4-6".to_string()));
+        assert!(completions.contains(&"/model anthropic/claude-sonnet-5".to_string()));
         assert!(completions.contains(&"/permissions workspace-write".to_string()));
         assert!(completions.contains(&"/session list".to_string()));
         assert!(completions.contains(&"/session switch session-current".to_string()));
@@ -15097,7 +15134,7 @@ mod tests {
 
         let resolved = with_current_dir(&root, || resolve_repl_model(DEFAULT_MODEL.to_string()));
 
-        assert_eq!(resolved, "anthropic/claude-sonnet-4-6");
+        assert_eq!(resolved, "anthropic/claude-sonnet-5");
 
         std::env::remove_var("ANTHROPIC_MODEL");
         std::env::remove_var("CLAW_CONFIG_HOME");
@@ -17297,7 +17334,7 @@ mod dump_manifests_tests {
 #[cfg(test)]
 mod alias_resolution_tests {
     use super::{
-        deprecated_model_replacement, is_fable_5, normalize_model_name,
+        deprecated_model_replacement, is_fable_5, looks_non_human, normalize_model_name,
         permission_mode_display, resolve_model_alias_with_config, validate_model_syntax,
     };
 
@@ -17306,7 +17343,7 @@ mod alias_resolution_tests {
         // Built-in aliases should resolve to their full IDs
         assert_eq!(
             resolve_model_alias_with_config("opus"),
-            "anthropic/claude-opus-4-6"
+            "anthropic/claude-opus-5"
         );
         assert_eq!(
             resolve_model_alias_with_config("sonnet"),
@@ -17407,9 +17444,14 @@ mod alias_resolution_tests {
 
     #[test]
     fn detects_deprecated_opus_4_6() {
+        // v2.1.219: old Opus 4.x ids now upgrade to Opus 5
         assert_eq!(
             deprecated_model_replacement("anthropic/claude-opus-4-6"),
-            Some("anthropic/claude-opus-4-8")
+            Some("anthropic/claude-opus-5")
+        );
+        assert_eq!(
+            deprecated_model_replacement("anthropic/claude-opus-4-8"),
+            Some("anthropic/claude-opus-5")
         );
     }
 
@@ -17423,8 +17465,9 @@ mod alias_resolution_tests {
             deprecated_model_replacement("anthropic/claude-fable-5"),
             None
         );
+        // v2.1.219: opus-5 is the current default Opus, not deprecated
         assert_eq!(
-            deprecated_model_replacement("anthropic/claude-opus-4-8"),
+            deprecated_model_replacement("anthropic/claude-opus-5"),
             None
         );
     }
@@ -17460,5 +17503,31 @@ mod alias_resolution_tests {
             permission_mode_display(Some("read-only"), PermissionMode::ReadOnly),
             "read-only"
         );
+    }
+
+    // --- v2.1.210: ultracode non-human input filter ---
+
+    #[test]
+    fn detects_webhook_payload_as_non_human() {
+        assert!(looks_non_human(
+            r#"{"event":"pull_request","action":"opened"}"#
+        ));
+        assert!(looks_non_human(
+            r#"{"webhook":"github","comment":"ultracode"}"#
+        ));
+    }
+
+    #[test]
+    fn detects_relayed_pr_comment_as_non_human() {
+        assert!(looks_non_human(
+            "See https://github.com/org/repo/pull/42 — run ultracode"
+        ));
+        assert!(looks_non_human("[webhook] ultracode triggered"));
+    }
+
+    #[test]
+    fn human_prompt_is_not_non_human() {
+        assert!(!looks_non_human("please ultracode this task"));
+        assert!(!looks_non_human("do a deep research on rust async"));
     }
 }

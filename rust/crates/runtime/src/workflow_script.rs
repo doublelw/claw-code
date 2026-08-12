@@ -39,6 +39,8 @@ impl WorkflowScript {
 
         let forbidden = [
             ("import ", "import statements are not allowed"),
+            // v2.1.223: dynamic import() runs code outside the workflow sandbox.
+            ("import(", "dynamic import() is not allowed"),
             ("require(", "require() calls are not allowed"),
             ("fetch(", "fetch() calls are not allowed"),
             ("eval(", "eval() calls are not allowed"),
@@ -312,6 +314,17 @@ mod tests {
         let script = "import fs from 'fs'; spawnAgent('a','b');";
         let err = WorkflowScript::validate(script).unwrap_err();
         assert!(err.errors.iter().any(|e| e.contains("import")));
+    }
+
+    #[test]
+    fn rejects_dynamic_import_call() {
+        // v2.1.223: dynamic import() must be blocked (no space after `import`).
+        let script = "const fs = import('fs'); spawnAgent('a','b');";
+        let err = WorkflowScript::validate(script).unwrap_err();
+        assert!(
+            err.errors.iter().any(|e| e.contains("dynamic import")),
+            "expected dynamic import rejection, got {err:?}"
+        );
     }
 
     #[test]

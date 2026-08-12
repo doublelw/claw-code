@@ -487,17 +487,38 @@ fn extract_tool_param(input: &str, key: &str) -> Option<String> {
 /// cannot visually alter the approval message (e.g. hide a `rm -rf` behind a
 /// RTL override). The returned string is safe to show to the user as the
 /// canonical representation of what will run.
+///
+/// v2.1.223: runs of tabs / control whitespace are collapsed to a single space
+/// so padding can no longer hide part of a command in the approval dialog.
 #[must_use]
 pub fn neutralize_tool_input_preview(input: &str) -> String {
-    input
+    let stripped: String = input
         .chars()
         .filter(|&c| !is_unicode_bidi_or_invisible(c))
         .map(|c| match c {
             '\u{2018}' | '\u{2019}' | '\u{201A}' | '\u{201B}' => '\'',
             '\u{201C}' | '\u{201D}' | '\u{201E}' | '\u{201F}' => '"',
+            // v2.1.223: collapse tab/vertical-tab/form-feed padding to a space.
+            '\t' | '\u{000B}' | '\u{000C}' => ' ',
             other => other,
         })
-        .collect()
+        .collect();
+    // Collapse runs of spaces that result from stripping zero-width chars or
+    // tab normalization, so hidden segments can't lurk between wide gaps.
+    let mut out = String::with_capacity(stripped.len());
+    let mut prev_space = false;
+    for c in stripped.chars() {
+        if c == ' ' {
+            if !prev_space {
+                out.push(' ');
+            }
+            prev_space = true;
+        } else {
+            out.push(c);
+            prev_space = false;
+        }
+    }
+    out
 }
 
 /// v2.1.211: true for Unicode characters that can hide or reorder visible text
@@ -820,6 +841,17 @@ mod tests {
     #[test]
     fn neutralize_preserves_normal_text() {
         assert_eq!(neutralize_tool_input_preview("ls -la src/"), "ls -la src/");
+    }
+
+    #[test]
+    fn neutralize_collapses_tab_padding() {
+        // v2.1.223: tabs can't hide command parts in the approval dialog.
+        assert_eq!(
+            neutralize_tool_input_preview("echo\tsafe\trm -rf /"),
+            "echo safe rm -rf /"
+        );
+        // collapsed space runs
+        assert_eq!(neutralize_tool_input_preview("a   b"), "a b");
     }
 
     #[test]

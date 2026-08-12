@@ -84,6 +84,14 @@ impl PermissionClassifier {
             return Classification::Prompt;
         }
 
+        // v2.1.221/223: zsh `[[ ]]` regex conditionals and crafted commands
+        // can hide executable content from the prefix analyzer. Any `[[ ]]`
+        // conditional, or a command containing invisible/control characters,
+        // is too ambiguous to auto-approve → prompt.
+        if Self::looks_evasive(trimmed, command) {
+            return Classification::Prompt;
+        }
+
         let read_only_prefixes = [
             "cat ",
             "head ",
@@ -236,6 +244,25 @@ impl PermissionClassifier {
         (lower.contains("/sessions/") || lower.contains("\\sessions\\"))
             && lower.contains("session-")
             && lower.contains(".jsonl")
+    }
+
+    /// v2.1.221/223: detect commands that can hide executable content from the
+    /// prefix analyzer, so they always prompt instead of being auto-approved.
+    /// - zsh `[[ ]]` regex conditionals (`[[ $x =~ ... ]]`) can run hidden logic
+    /// - any control character or non-printable Unicode could conceal part of a
+    ///   command from the approval display
+    fn looks_evasive(trimmed_lower: &str, original: &str) -> bool {
+        // zsh/bash conditional that can embed executable regex/subshell content
+        if trimmed_lower.contains("[[") && trimmed_lower.contains("]]") {
+            return true;
+        }
+        // Control chars (other than newline/tab which are benign structure) or
+        // non-ASCII control ranges indicate hidden/padded content.
+        original.chars().any(|c| {
+            (c.is_control() && c != '\n' && c != '\t')
+                || (c.is_ascii() && !c.is_ascii_graphic() && c != ' ' && c != '\n' && c != '\t')
+                || (c as u32 >= 0x2028 && c as u32 <= 0x202F) // bidi / format block
+        })
     }
 }
 
@@ -560,6 +587,45 @@ mod tests {
         // Under the limit, normal classification applies.
         assert_eq!(
             classifier().classify("bash", r#"{"command":"cat README.md"}"#),
+            Classification::Allow
+        );
+    }
+
+    // --- v2.1.221/223: hidden-command bypass ---
+
+    #[test]
+    fn zsh_double_bracket_conditional_prompts() {
+        // `[[ ... ]]` regex conditionals can execute hidden logic.
+        assert_eq!(
+            classifier().classify("bash", r#"{"command":"[[ $x =~ rm ]] && echo hi"}"#),
+            Classification::Prompt
+        );
+    }
+
+    #[test]
+    fn command_with_control_char_prompts() {
+        // A backspace (U+0008) embedded to hide content → prompt.
+        let payload = format!("{{\"command\":\"echo\u{8}safe rm -rf /\"}}");
+        assert_eq!(
+            classifier().classify("bash", &payload),
+            Classification::Prompt
+        );
+    }
+
+    #[test]
+    fn command_with_bidi_char_prompts() {
+        // Bidi override char (U+202E) padding → evasive → prompt.
+        assert_eq!(
+            classifier().classify("bash", "{\"command\":\"echo \u{202E}rm -rf\"}"),
+            Classification::Prompt
+        );
+    }
+
+    #[test]
+    fn plain_command_not_evasive() {
+        // Normal commands are not flagged as evasive.
+        assert_eq!(
+            classifier().classify("bash", r#"{"command":"ls -la"}"#),
             Classification::Allow
         );
     }

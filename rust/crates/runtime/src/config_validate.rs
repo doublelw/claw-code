@@ -261,6 +261,34 @@ const TOP_LEVEL_FIELDS: &[FieldSpec] = &[
         name: "workflow",
         expected: FieldType::Object,
     },
+    // v2.1.224: cross-session inbound message approval + dialog expiry.
+    FieldSpec {
+        name: "crossSessionInbound",
+        expected: FieldType::Bool,
+    },
+    FieldSpec {
+        name: "dialogExpiry",
+        expected: FieldType::Bool,
+    },
+    // v2.1.223: marketplace owner-wildcard / blocking managed settings.
+    FieldSpec {
+        name: "strictKnownMarketplaces",
+        expected: FieldType::StringArray,
+    },
+    FieldSpec {
+        name: "blockedMarketplaces",
+        expected: FieldType::StringArray,
+    },
+    // v2.1.207: disable auto mode entirely.
+    FieldSpec {
+        name: "disableAutoMode",
+        expected: FieldType::Bool,
+    },
+    // v2.1.217: emoji shortcode autocomplete toggle.
+    FieldSpec {
+        name: "emojiCompletionEnabled",
+        expected: FieldType::Bool,
+    },
 ];
 
 const WORKFLOW_FIELDS: &[FieldSpec] = &[FieldSpec {

@@ -19,7 +19,7 @@ use crate::session::{parse_created_at_ms_from_session_id, Session, SessionError}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionStore {
     /// Resolved root of the session namespace, e.g.
-    /// `/home/user/project/.claw/sessions/a1b2c3d4e5f60718/`.
+    /// `/home/user/project/.clawc/sessions/a1b2c3d4e5f60718/`.
     sessions_root: PathBuf,
     /// The canonical workspace path that was fingerprinted.
     workspace_root: PathBuf,
@@ -28,7 +28,7 @@ pub struct SessionStore {
 impl SessionStore {
     /// Build a store from the server's current working directory.
     ///
-    /// The on-disk layout becomes `<cwd>/.claw/sessions/<workspace_hash>/`.
+    /// The on-disk layout becomes `<cwd>/.clawc/sessions/<workspace_hash>/`.
     pub fn from_cwd(cwd: impl AsRef<Path>) -> Result<Self, SessionControlError> {
         let cwd = cwd.as_ref();
         // #151: canonicalize so equivalent paths (symlinks, relative vs
@@ -37,7 +37,7 @@ impl SessionStore {
         // fails (e.g. the directory doesn't exist yet).
         let canonical_cwd = fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
         let sessions_root = canonical_cwd
-            .join(".claw")
+            .join(".clawc")
             .join("sessions")
             .join(workspace_fingerprint(&canonical_cwd));
         fs::create_dir_all(&sessions_root)?;
@@ -260,14 +260,14 @@ impl SessionStore {
     }
 
     /// Scan all known session storage locations for sessions from any workspace.
-    /// Checks both the global root (~/.claw/sessions/) and the project-local
-    /// .claw/sessions/ parent directory. Used as a fallback when the current
+    /// Checks both the global root (~/.clawc/sessions/) and the project-local
+    /// .clawc/sessions/ parent directory. Used as a fallback when the current
     /// workspace has no sessions.
     #[allow(clippy::unnecessary_wraps)]
     fn scan_global_sessions(&self) -> Result<Vec<ManagedSessionSummary>, SessionControlError> {
         let mut sessions = Vec::new();
 
-        // Scan global root: ~/.claw/sessions/<fingerprint>/
+        // Scan global root: ~/.clawc/sessions/<fingerprint>/
         let global_root = global_sessions_root();
         if let Ok(entries) = fs::read_dir(&global_root) {
             for entry in entries.flatten() {
@@ -278,7 +278,7 @@ impl SessionStore {
             }
         }
 
-        // Scan project-local parent: <cwd>/.claw/sessions/<fingerprint>/
+        // Scan project-local parent: <cwd>/.clawc/sessions/<fingerprint>/
         // Sessions are stored here by from_cwd(), so we must check all
         // fingerprint subdirs, not just the current workspace's.
         if let Some(local_parent) = self.legacy_sessions_root() {
@@ -463,7 +463,7 @@ pub fn workspace_fingerprint(workspace_root: &Path) -> String {
 }
 
 /// The global sessions directory shared across all workspaces.
-/// Points to `~/.claw/sessions/` (or `$CLAW_CONFIG_HOME/sessions/`).
+/// Points to `~/.clawc/sessions/` (or `$CLAW_CONFIG_HOME/sessions/`).
 #[must_use]
 pub fn global_sessions_root() -> PathBuf {
     crate::config::default_config_home().join("sessions")
@@ -705,24 +705,24 @@ fn session_id_from_path(path: &Path) -> Option<String> {
 }
 
 fn format_missing_session_reference(reference: &str, sessions_root: &Path) -> String {
-    // #80: show the actual workspace-fingerprint directory instead of lying about .claw/sessions/
+    // #80: show the actual workspace-fingerprint directory instead of lying about .clawc/sessions/
     let fingerprint_dir = sessions_root
         .file_name()
         .and_then(|f| f.to_str())
         .unwrap_or("<unknown>");
     format!(
-        "session not found: {reference}\nHint: managed sessions live in .claw/sessions/{fingerprint_dir}/ (workspace-specific partition).\nTry `{LATEST_SESSION_REFERENCE}` for the most recent session or `/session list` in the REPL."
+        "session not found: {reference}\nHint: managed sessions live in .clawc/sessions/{fingerprint_dir}/ (workspace-specific partition).\nTry `{LATEST_SESSION_REFERENCE}` for the most recent session or `/session list` in the REPL."
     )
 }
 
 fn format_no_managed_sessions(sessions_root: &Path) -> String {
-    // #80: show the actual workspace-fingerprint directory instead of lying about .claw/sessions/
+    // #80: show the actual workspace-fingerprint directory instead of lying about .clawc/sessions/
     let fingerprint_dir = sessions_root
         .file_name()
         .and_then(|f| f.to_str())
         .unwrap_or("<unknown>");
     format!(
-        "no managed sessions found in .claw/sessions/{fingerprint_dir}/\nStart `claw` to create a session, then rerun with `--resume {LATEST_SESSION_REFERENCE}`.\nNote: /resume {LATEST_SESSION_REFERENCE} searches all workspaces."
+        "no managed sessions found in .clawc/sessions/{fingerprint_dir}/\nStart `claw` to create a session, then rerun with `--resume {LATEST_SESSION_REFERENCE}`.\nNote: /resume {LATEST_SESSION_REFERENCE} searches all workspaces."
     )
 }
 
@@ -1076,7 +1076,7 @@ mod tests {
         let workspace_b = fs::canonicalize(&workspace_b).unwrap_or(workspace_b);
 
         let store_b = SessionStore::from_cwd(&workspace_b).expect("store b should build");
-        let legacy_root = workspace_b.join(".claw").join("sessions");
+        let legacy_root = workspace_b.join(".clawc").join("sessions");
         fs::create_dir_all(&legacy_root).expect("legacy root should exist");
         let legacy_path = legacy_root.join("legacy-cross.jsonl");
         let session = Session::new()
@@ -1110,7 +1110,7 @@ mod tests {
         // #151: canonicalize for path-representation consistency with store.
         let base = fs::canonicalize(&base).unwrap_or(base);
         let store = SessionStore::from_cwd(&base).expect("store should build");
-        let legacy_root = base.join(".claw").join("sessions");
+        let legacy_root = base.join(".clawc").join("sessions");
         let legacy_path = legacy_root.join("legacy-safe.jsonl");
         fs::create_dir_all(&legacy_root).expect("legacy root should exist");
         let session = Session::new()
@@ -1140,7 +1140,7 @@ mod tests {
         // #151: canonicalize for path-representation consistency with store.
         let base = fs::canonicalize(&base).unwrap_or(base);
         let store = SessionStore::from_cwd(&base).expect("store should build");
-        let legacy_root = base.join(".claw").join("sessions");
+        let legacy_root = base.join(".clawc").join("sessions");
         let legacy_path = legacy_root.join("legacy-unbound.json");
         fs::create_dir_all(&legacy_root).expect("legacy root should exist");
         let session = Session::new().with_persistence_path(legacy_path.clone());

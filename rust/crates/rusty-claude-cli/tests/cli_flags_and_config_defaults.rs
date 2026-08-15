@@ -133,16 +133,16 @@ fn omc_namespaced_slash_commands_surface_a_targeted_compatibility_hint() {
 fn config_command_loads_defaults_from_standard_config_locations() {
     // given
     let temp_dir = unique_temp_dir("config-defaults");
-    let config_home = temp_dir.join("home").join(".claw");
-    fs::create_dir_all(temp_dir.join(".claw")).expect("project config dir should exist");
+    let config_home = temp_dir.join("home").join(".clawc");
+    fs::create_dir_all(temp_dir.join(".clawc")).expect("project config dir should exist");
     fs::create_dir_all(&config_home).expect("home config dir should exist");
 
     fs::write(config_home.join("settings.json"), r#"{"model":"haiku"}"#)
         .expect("write user settings");
-    fs::write(temp_dir.join(".claw.json"), r#"{"model":"sonnet"}"#)
+    fs::write(temp_dir.join(".clawc.json"), r#"{"model":"sonnet"}"#)
         .expect("write project settings");
     fs::write(
-        temp_dir.join(".claw").join("settings.local.json"),
+        temp_dir.join(".clawc").join("settings.local.json"),
         r#"{"model":"opus"}"#,
     )
     .expect("write local settings");
@@ -173,10 +173,10 @@ fn config_command_loads_defaults_from_standard_config_locations() {
             .to_str()
             .expect("utf8 path")
     ));
-    assert!(stdout.contains(temp_dir.join(".claw.json").to_str().expect("utf8 path")));
+    assert!(stdout.contains(temp_dir.join(".clawc.json").to_str().expect("utf8 path")));
     assert!(stdout.contains(
         temp_dir
-            .join(".claw")
+            .join(".clawc")
             .join("settings.local.json")
             .to_str()
             .expect("utf8 path")
@@ -189,7 +189,7 @@ fn config_command_loads_defaults_from_standard_config_locations() {
 fn doctor_command_runs_as_a_local_shell_entrypoint() {
     // given
     let temp_dir = unique_temp_dir("doctor-entrypoint");
-    let config_home = temp_dir.join("home").join(".claw");
+    let config_home = temp_dir.join("home").join(".clawc");
     fs::create_dir_all(&config_home).expect("config home should exist");
 
     // when
@@ -218,7 +218,7 @@ fn doctor_command_runs_as_a_local_shell_entrypoint() {
 #[test]
 fn local_smoke_commands_do_not_require_live_credentials() {
     let temp_dir = unique_temp_dir("offline-local-smoke path with spaces");
-    let config_home = temp_dir.join("home with spaces").join(".claw");
+    let config_home = temp_dir.join("home with spaces").join(".clawc");
     fs::create_dir_all(&config_home).expect("config home should exist");
     fs::create_dir_all(&temp_dir).expect("temp dir should exist");
 
@@ -260,7 +260,7 @@ fn local_smoke_commands_do_not_require_live_credentials() {
 #[test]
 fn local_subcommand_help_does_not_fall_through_to_runtime_or_provider_calls() {
     let temp_dir = unique_temp_dir("subcommand-help");
-    let config_home = temp_dir.join("home").join(".claw");
+    let config_home = temp_dir.join("home").join(".clawc");
     fs::create_dir_all(&config_home).expect("config home should exist");
 
     let doctor_help = command_in(&temp_dir)

@@ -971,11 +971,11 @@ fn mcp_json_reports_required_optional_and_redacts_secret_values() {
     let root = unique_temp_dir("mcp-required-optional");
     let config_home = root.join("config-home");
     let home = root.join("home");
-    fs::create_dir_all(root.join(".claw")).expect("workspace config should exist");
+    fs::create_dir_all(root.join(".clawc")).expect("workspace config should exist");
     fs::create_dir_all(&config_home).expect("config home should exist");
     fs::create_dir_all(&home).expect("home should exist");
     fs::write(
-        root.join(".claw").join("settings.json"),
+        root.join(".clawc").join("settings.json"),
         r#"{
           "mcpServers": {
             "required-stdio": {
@@ -1054,7 +1054,7 @@ fn mcp_degraded_config_and_failed_usage_are_distinct_json_contracts() {
     fs::create_dir_all(&config_home).expect("config home should exist");
     fs::create_dir_all(&home).expect("home should exist");
     fs::write(
-        root.join(".claw.json"),
+        root.join(".clawc.json"),
         r#"{
           "mcpServers": {
             "missing-command": {
@@ -2054,15 +2054,18 @@ fn export_json_has_kind_702() {
 
 #[test]
 fn config_parse_error_has_typed_error_kind_and_hint_764() {
-    // #764: Malformed .claw/settings.json must emit error_kind:config_parse_error
+    // #764: Malformed .clawc/settings.json must emit error_kind:config_parse_error
     // and a non-null hint in --output-format json mode (was error_kind:"unknown"
     // + hint:null before #763/#764 fixes).
     let root = unique_temp_dir("config-parse-error-764");
-    fs::create_dir_all(root.join(".claw")).expect("temp .claw dir should exist");
+    fs::create_dir_all(root.join(".clawc")).expect("temp .clawc dir should exist");
 
     // Write an invalid JSON file (type mismatch: model must be a string)
-    fs::write(root.join(".claw").join("settings.json"), r#"{"model": 99}"#)
-        .expect("settings.json should write");
+    fs::write(
+        root.join(".clawc").join("settings.json"),
+        r#"{"model": 99}"#,
+    )
+    .expect("settings.json should write");
 
     let output = run_claw(&root, &["--output-format", "json", "config", "show"], &[]);
     assert!(

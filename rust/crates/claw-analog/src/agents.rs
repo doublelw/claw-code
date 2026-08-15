@@ -164,7 +164,7 @@ pub struct AgentsCli {
     #[arg(short = 'w', long, default_value = ".", value_name = "DIR")]
     pub workspace: PathBuf,
 
-    /// Config path (default: `<workspace>/.claw-analog.toml`).
+    /// Config path (default: `<workspace>/.clawc-analog.toml`).
     #[arg(long, value_name = "PATH")]
     pub config: Option<PathBuf>,
 
@@ -195,7 +195,7 @@ fn load_file_config(path: &Path) -> AnalogFileConfig {
 fn config_path(args: &AgentsCli) -> PathBuf {
     args.config
         .clone()
-        .unwrap_or_else(|| args.workspace.join(".claw-analog.toml"))
+        .unwrap_or_else(|| args.workspace.join(".clawc-analog.toml"))
 }
 
 fn derive_agent_session_path(base: &Path, agent_name: &str) -> PathBuf {
@@ -441,7 +441,7 @@ mod tests {
         let workspace = dir.path().canonicalize().unwrap();
         std::fs::write(workspace.join("fixture.txt"), "hello parity fixture\n").unwrap();
 
-        let base_session = workspace.join(".claw").join("agents-base.json");
+        let base_session = workspace.join(".clawc").join("agents-base.json");
         std::fs::create_dir_all(base_session.parent().unwrap()).unwrap();
         std::fs::write(
             &base_session,

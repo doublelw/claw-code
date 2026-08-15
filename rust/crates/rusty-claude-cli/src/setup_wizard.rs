@@ -63,7 +63,7 @@ pub fn run_setup_wizard() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!();
-    println!("  \x1b[32mProvider saved to ~/.claw/settings.json\x1b[0m");
+    println!("  \x1b[32mProvider saved to ~/.clawc/settings.json\x1b[0m");
     println!("  Run \x1b[1m/model {}\x1b[0m or restart claw to activate.", model.as_deref().unwrap_or(&kind));
     println!();
 
@@ -250,7 +250,7 @@ fn prompt_fast_model(
 
 fn load_current_settings_field(field: &str) -> Option<String> {
     let home = std::env::var("HOME").ok()?;
-    let settings_path = std::path::Path::new(&home).join(".claw/settings.json");
+    let settings_path = std::path::Path::new(&home).join(".clawc/settings.json");
     let content = std::fs::read_to_string(&settings_path).ok()?;
     let json: serde_json::Value = serde_json::from_str(&content).ok()?;
     json.get(field)?.as_str().map(|s| s.to_string())
@@ -258,7 +258,7 @@ fn load_current_settings_field(field: &str) -> Option<String> {
 
 fn save_settings_field(field: &str, value: &str) -> Result<(), Box<dyn std::error::Error>> {
     let home = std::env::var("HOME")?;
-    let settings_dir = std::path::Path::new(&home).join(".claw");
+    let settings_dir = std::path::Path::new(&home).join(".clawc");
     let settings_path = settings_dir.join("settings.json");
 
     let mut settings: serde_json::Value = if settings_path.exists() {

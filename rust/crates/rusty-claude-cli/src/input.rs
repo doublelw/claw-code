@@ -118,11 +118,11 @@ impl LineEditor {
         editor.bind_sequence(KeyEvent(KeyCode::Char('J'), Modifiers::CTRL), Cmd::Newline);
         editor.bind_sequence(KeyEvent(KeyCode::Enter, Modifiers::SHIFT), Cmd::Newline);
 
-        // Load persistent history from ~/.claw/repl_history
+        // Load persistent history from ~/.clawc/repl_history
         let home = std::env::var("HOME")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
-        let history_path = home.join(".claw").join("repl_history");
+        let history_path = home.join(".clawc").join("repl_history");
         if let Some(parent) = history_path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }

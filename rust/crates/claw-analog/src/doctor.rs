@@ -81,10 +81,10 @@ impl From<DoctorPresetCli> for Preset {
 
 #[derive(Debug, clap::Args)]
 pub struct DoctorCli {
-    /// Workspace root (same as `claw-analog -w`; config defaults to `<workspace>/.claw-analog.toml`).
+    /// Workspace root (same as `claw-analog -w`; config defaults to `<workspace>/.clawc-analog.toml`).
     #[arg(short = 'w', long, default_value = ".", value_name = "DIR")]
     pub workspace: PathBuf,
-    /// Config path (default: `<workspace>/.claw-analog.toml`).
+    /// Config path (default: `<workspace>/.clawc-analog.toml`).
     #[arg(long, value_name = "PATH")]
     pub config: Option<PathBuf>,
     /// Override model (same precedence as main CLI).
@@ -113,7 +113,7 @@ pub struct DoctorCli {
         action = clap::ArgAction::SetTrue
     )]
     pub accept_danger_non_interactive: bool,
-    /// Profile TOML path (optional; if omitted, uses TOML `profile` or default `~/.claw-analog/profile.toml`).
+    /// Profile TOML path (optional; if omitted, uses TOML `profile` or default `~/.clawc-analog/profile.toml`).
     #[arg(long, value_name = "PATH")]
     pub profile: Option<PathBuf>,
     /// TCP connect to host:port from `ANTHROPIC_BASE_URL` (or default API URL); not a full HTTP check.
@@ -144,7 +144,7 @@ pub fn run_doctor(args: DoctorCli) -> i32 {
     let cfg_path = args
         .config
         .clone()
-        .unwrap_or_else(|| workspace.join(".claw-analog.toml"));
+        .unwrap_or_else(|| workspace.join(".clawc-analog.toml"));
     let (file_cfg, cfg_note) = if cfg_path.is_file() {
         match load_analog_toml(&cfg_path) {
             Ok(c) => (c, "loaded"),
@@ -182,7 +182,7 @@ pub fn run_doctor(args: DoctorCli) -> i32 {
     println!("  schema: {NDJSON_SCHEMA}");
     println!("  format_version: {NDJSON_FORMAT_VERSION}\n");
 
-    println!("Effective config (merge of `.claw-analog.toml` + flags below):");
+    println!("Effective config (merge of `.clawc-analog.toml` + flags below):");
     println!("  workspace: {}", canon_ws.display());
     println!("  config: {} ({cfg_note})", cfg_path.display());
     println!("  model: {}", resolved.model);
@@ -289,7 +289,7 @@ fn resolve_profile_path_doctor(
             workspace.join(p)
         });
     }
-    let def = home_dir()?.join(".claw-analog").join("profile.toml");
+    let def = home_dir()?.join(".clawc-analog").join("profile.toml");
     if def.is_file() {
         Some(def)
     } else {

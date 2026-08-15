@@ -14,7 +14,7 @@ pub struct ValidateCli {
     pub workspace: PathBuf,
     #[arg(long, value_name = "PATH")]
     pub config: Option<PathBuf>,
-    /// Require `<workspace>/.claw-analog.toml` (or `--config`) to exist and parse.
+    /// Require `<workspace>/.clawc-analog.toml` (or `--config`) to exist and parse.
     #[arg(long, default_value_t = false, action = clap::ArgAction::SetTrue)]
     pub strict: bool,
     #[arg(long, value_name = "PATH")]
@@ -25,7 +25,7 @@ pub fn run_validate(cli: ValidateCli) -> i32 {
     let cfg_path = cli
         .config
         .clone()
-        .unwrap_or_else(|| cli.workspace.join(".claw-analog.toml"));
+        .unwrap_or_else(|| cli.workspace.join(".clawc-analog.toml"));
 
     let file_cfg = if cfg_path.is_file() {
         match load_analog_toml(&cfg_path) {
@@ -60,7 +60,7 @@ pub fn run_validate(cli: ValidateCli) -> i32 {
     let mut ok = true;
     match &prof_path {
         None => println!(
-            "Profile: (none — no CLI/TOML path and no default ~/.claw-analog/profile.toml)"
+            "Profile: (none — no CLI/TOML path and no default ~/.clawc-analog/profile.toml)"
         ),
         Some(p) => match load_profile_hint(p) {
             Ok(Some(line)) => println!(
@@ -131,7 +131,7 @@ mod tests {
     #[test]
     fn parses_when_config_present() {
         let dir = tempfile::tempdir().unwrap();
-        let p = dir.path().join(".claw-analog.toml");
+        let p = dir.path().join(".clawc-analog.toml");
         std::fs::write(&p, r#"model = "sonnet""#).unwrap();
         let code = run_validate(ValidateCli {
             workspace: dir.path().to_path_buf(),

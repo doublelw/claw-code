@@ -237,7 +237,7 @@ impl PermissionClassifier {
     }
 
     /// v2.1.205: detect paths/inputs targeting a session transcript file.
-    /// claw-code stores transcripts under `.claw/sessions/<id>/session-*.jsonl`
+    /// claw-code stores transcripts under `.clawc/sessions/<id>/session-*.jsonl`
     /// (and the Claude-compatible `.claude/sessions/...`). Any write/edit to a
     /// `session-*.jsonl` inside a `sessions/` directory is treated as tampering.
     fn targets_session_transcript(lower: &str) -> bool {
@@ -518,7 +518,7 @@ mod tests {
         assert_eq!(
             classifier().classify(
                 "write_file",
-                r#"{"path":".claw/sessions/abc123/session-1234.jsonl","content":"x"}"#,
+                r#"{"path":".clawc/sessions/abc123/session-1234.jsonl","content":"x"}"#,
             ),
             Classification::Deny
         );
@@ -540,7 +540,7 @@ mod tests {
         assert_eq!(
             classifier().classify(
                 "bash",
-                r#"{"command":"echo x > .claw/sessions/abc/session-1.jsonl"}"#,
+                r#"{"command":"echo x > .clawc/sessions/abc/session-1.jsonl"}"#,
             ),
             Classification::Deny
         );

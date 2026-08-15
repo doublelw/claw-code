@@ -20,7 +20,13 @@ const CHUNK_CHARS: usize = 900;
 const CHUNK_OVERLAP: usize = 120;
 const EMBED_BATCH: usize = 16;
 
-static SKIP_DIR_NAMES: &[&str] = &[".git", "target", "node_modules", "__pycache__", ".claw-rag"];
+static SKIP_DIR_NAMES: &[&str] = &[
+    ".git",
+    "target",
+    "node_modules",
+    "__pycache__",
+    ".clawc-rag",
+];
 
 static TEXT_EXTENSIONS: &[&str] = &[
     "rs", "md", "toml", "txt", "json", "yaml", "yml", "js", "ts", "tsx", "jsx", "py", "go", "c",

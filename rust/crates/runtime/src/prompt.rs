@@ -239,10 +239,16 @@ fn discover_instruction_files(cwd: &Path) -> std::io::Result<Vec<ContextFile>> {
     let mut files = Vec::new();
     for dir in directories {
         for candidate in [
+            // ClawC scheme (primary): CLAWC.md mirrors Claude Code's CLAUDE.md.
+            dir.join("CLAWC.md"),
+            dir.join("CLAWC.local.md"),
+            dir.join(".clawc").join("CLAWC.md"),
+            dir.join(".clawc").join("instructions.md"),
+            // Claude Code scheme (compat): read but never written, so existing
+            // projects keep working unchanged.
             dir.join("CLAUDE.md"),
             dir.join("CLAUDE.local.md"),
-            dir.join(".claw").join("CLAUDE.md"),
-            dir.join(".claw").join("instructions.md"),
+            dir.join(".clawc").join("CLAUDE.md"),
         ] {
             push_context_file(&mut files, candidate)?;
         }
@@ -594,23 +600,23 @@ mod tests {
     fn discovers_instruction_files_from_ancestor_chain() {
         let root = temp_dir();
         let nested = root.join("apps").join("api");
-        fs::create_dir_all(nested.join(".claw")).expect("nested claw dir");
+        fs::create_dir_all(nested.join(".clawc")).expect("nested claw dir");
         fs::write(root.join("CLAUDE.md"), "root instructions").expect("write root instructions");
         fs::write(root.join("CLAUDE.local.md"), "local instructions")
             .expect("write local instructions");
         fs::create_dir_all(root.join("apps")).expect("apps dir");
-        fs::create_dir_all(root.join("apps").join(".claw")).expect("apps claw dir");
+        fs::create_dir_all(root.join("apps").join(".clawc")).expect("apps claw dir");
         fs::write(root.join("apps").join("CLAUDE.md"), "apps instructions")
             .expect("write apps instructions");
         fs::write(
-            root.join("apps").join(".claw").join("instructions.md"),
+            root.join("apps").join(".clawc").join("instructions.md"),
             "apps dot claude instructions",
         )
         .expect("write apps dot claude instructions");
-        fs::write(nested.join(".claw").join("CLAUDE.md"), "nested rules")
+        fs::write(nested.join(".clawc").join("CLAUDE.md"), "nested rules")
             .expect("write nested rules");
         fs::write(
-            nested.join(".claw").join("instructions.md"),
+            nested.join(".clawc").join("instructions.md"),
             "nested instructions",
         )
         .expect("write nested instructions");
@@ -627,10 +633,11 @@ mod tests {
             vec![
                 "root instructions",
                 "local instructions",
-                "apps instructions",
+                // ClawC-scheme files load before Claude-scheme files per dir.
                 "apps dot claude instructions",
-                "nested rules",
-                "nested instructions"
+                "apps instructions",
+                "nested instructions",
+                "nested rules"
             ]
         );
         fs::remove_dir_all(root).expect("cleanup temp dir");
@@ -670,8 +677,8 @@ mod tests {
     #[test]
     fn displays_context_paths_compactly() {
         assert_eq!(
-            display_context_path(Path::new("/tmp/project/.claw/CLAUDE.md")),
-            "CLAUDE.md"
+            display_context_path(Path::new("/tmp/project/.clawc/CLAWC.md")),
+            "CLAWC.md"
         );
     }
 
@@ -830,10 +837,10 @@ mod tests {
     #[test]
     fn load_system_prompt_reads_claude_files_and_config() {
         let root = temp_dir();
-        fs::create_dir_all(root.join(".claw")).expect("claw dir");
+        fs::create_dir_all(root.join(".clawc")).expect("claw dir");
         fs::write(root.join("CLAUDE.md"), "Project rules").expect("write instructions");
         fs::write(
-            root.join(".claw").join("settings.json"),
+            root.join(".clawc").join("settings.json"),
             r#"{"permissionMode":"acceptEdits"}"#,
         )
         .expect("write settings");
@@ -923,10 +930,10 @@ mod tests {
     #[test]
     fn renders_claude_code_style_sections_with_project_context() {
         let root = temp_dir();
-        fs::create_dir_all(root.join(".claw")).expect("claw dir");
+        fs::create_dir_all(root.join(".clawc")).expect("claw dir");
         fs::write(root.join("CLAUDE.md"), "Project rules").expect("write CLAUDE.md");
         fs::write(
-            root.join(".claw").join("settings.json"),
+            root.join(".clawc").join("settings.json"),
             r#"{"permissionMode":"acceptEdits"}"#,
         )
         .expect("write settings");
@@ -965,9 +972,9 @@ mod tests {
     fn discovers_dot_claude_instructions_markdown() {
         let root = temp_dir();
         let nested = root.join("apps").join("api");
-        fs::create_dir_all(nested.join(".claw")).expect("nested claw dir");
+        fs::create_dir_all(nested.join(".clawc")).expect("nested claw dir");
         fs::write(
-            nested.join(".claw").join("instructions.md"),
+            nested.join(".clawc").join("instructions.md"),
             "instruction markdown",
         )
         .expect("write instructions.md");
@@ -976,7 +983,7 @@ mod tests {
         assert!(context
             .instruction_files
             .iter()
-            .any(|file| file.path.ends_with(".claw/instructions.md")));
+            .any(|file| file.path.ends_with(".clawc/instructions.md")));
         assert!(
             render_instruction_files(&context.instruction_files).contains("instruction markdown")
         );

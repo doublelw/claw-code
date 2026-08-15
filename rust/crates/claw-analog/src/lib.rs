@@ -298,7 +298,7 @@ pub struct ResolvedAnalogOptions {
     pub provenance: Vec<String>,
 }
 
-/// Effective options after merging `.claw-analog.toml` with optional CLI overrides (same precedence as `claw-analog` run).
+/// Effective options after merging `.clawc-analog.toml` with optional CLI overrides (same precedence as `claw-analog` run).
 #[must_use]
 pub fn resolve_analog_options(
     file: &AnalogFileConfig,
@@ -311,7 +311,7 @@ pub fn resolve_analog_options(
         if fm.is_empty() {
             (ANALOG_DEFAULT_MODEL.to_string(), "default (empty in TOML)")
         } else {
-            (fm.to_string(), ".claw-analog.toml")
+            (fm.to_string(), ".clawc-analog.toml")
         }
     } else {
         (ANALOG_DEFAULT_MODEL.to_string(), "default")
@@ -320,7 +320,7 @@ pub fn resolve_analog_options(
     let (preset, p_src) = if let Some(p) = overrides.preset {
         (p, "CLI")
     } else if let Some(s) = file.preset.as_deref().and_then(Preset::from_toml_str) {
-        (s, ".claw-analog.toml")
+        (s, ".clawc-analog.toml")
     } else {
         (Preset::None, "default (none)")
     };
@@ -332,7 +332,7 @@ pub fn resolve_analog_options(
         .as_deref()
         .and_then(permission_mode_from_toml_str)
     {
-        (s, ".claw-analog.toml")
+        (s, ".clawc-analog.toml")
     } else {
         match preset {
             Preset::Implement => (
@@ -350,7 +350,7 @@ pub fn resolve_analog_options(
         .as_deref()
         .and_then(output_format_from_toml_str)
     {
-        (s, ".claw-analog.toml")
+        (s, ".clawc-analog.toml")
     } else {
         (OutputFormat::Rich, "default (rich)")
     };
@@ -360,7 +360,7 @@ pub fn resolve_analog_options(
         StreamOverride::ForceOff => (false, "CLI (--no-stream)"),
         StreamOverride::FromFile => {
             if let Some(b) = file.stream {
-                (b, ".claw-analog.toml")
+                (b, ".clawc-analog.toml")
             } else {
                 (false, "default (off)")
             }
@@ -372,7 +372,7 @@ pub fn resolve_analog_options(
     let re_src = if overrides.no_runtime_enforcer {
         "CLI (--no-runtime-enforcer)"
     } else if file.no_runtime_enforcer == Some(true) {
-        ".claw-analog.toml"
+        ".clawc-analog.toml"
     } else {
         "default (on)"
     };
@@ -383,9 +383,9 @@ pub fn resolve_analog_options(
         overrides.accept_danger_non_interactive,
         file.accept_danger_non_interactive.unwrap_or(false),
     ) {
-        (true, true) => "CLI and .claw-analog.toml",
+        (true, true) => "CLI and .clawc-analog.toml",
         (true, false) => "CLI",
-        (false, true) => ".claw-analog.toml",
+        (false, true) => ".clawc-analog.toml",
         (false, false) => "default (off)",
     };
 
@@ -436,7 +436,7 @@ pub fn analog_expand_tilde_path(raw: &str) -> PathBuf {
     }
 }
 
-/// Match main CLI profile resolution: `--profile`, then TOML `profile`, then default `~/.claw-analog/profile.toml` if it exists.
+/// Match main CLI profile resolution: `--profile`, then TOML `profile`, then default `~/.clawc-analog/profile.toml` if it exists.
 #[must_use]
 pub fn resolve_analog_profile_path(
     workspace: &Path,
@@ -459,7 +459,7 @@ pub fn resolve_analog_profile_path(
         });
     }
     let def = analog_user_home_dir()?
-        .join(".claw-analog")
+        .join(".clawc-analog")
         .join("profile.toml");
     if def.is_file() {
         Some(def)
@@ -608,7 +608,7 @@ struct ProfileToml {
     line: Option<String>,
 }
 
-/// Read `~/.claw-analog/profile.toml`-style file: single `line` merged into system prompt.
+/// Read `~/.clawc-analog/profile.toml`-style file: single `line` merged into system prompt.
 pub fn load_profile_hint(path: &Path) -> Result<Option<String>, String> {
     let meta = std::fs::metadata(path).map_err(|e| e.to_string())?;
     if meta.len() as usize > PROFILE_FILE_MAX_BYTES {
@@ -674,7 +674,7 @@ pub struct AnalogConfig {
     pub rag_top_k_max: u32,
 }
 
-/// Optional defaults from `.claw-analog.toml` (see `load_analog_toml`).
+/// Optional defaults from `.clawc-analog.toml` (see `load_analog_toml`).
 #[derive(Debug, Clone, Default, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AnalogFileConfig {
@@ -696,7 +696,7 @@ pub struct AnalogFileConfig {
     pub language: Option<String>,
     /// Session file path (relative to workspace if not absolute).
     pub session: Option<String>,
-    /// Profile snippet path (default `~/.claw-analog/profile.toml` when omitted; see `profile` CLI).
+    /// Profile snippet path (default `~/.clawc-analog/profile.toml` when omitted; see `profile` CLI).
     pub profile: Option<String>,
     /// Override env `RAG_BASE_URL` when non-empty (HTTP root of `claw-rag-service`, no trailing `/v1` path).
     pub rag_base_url: Option<String>,
@@ -706,7 +706,7 @@ pub struct AnalogFileConfig {
     pub rag_top_k_max: Option<u32>,
 }
 
-/// Read `.claw-analog.toml`; relative paths are the caller's responsibility.
+/// Read `.clawc-analog.toml`; relative paths are the caller's responsibility.
 pub fn load_analog_toml(path: &Path) -> Result<AnalogFileConfig, String> {
     let raw = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
     toml::from_str(&raw).map_err(|e| e.to_string())
@@ -1365,7 +1365,7 @@ pub async fn run(
                         )
                         .await
                     }
-                    _ => "error: retrieve_context is not configured (set RAG_BASE_URL or rag_base_url in .claw-analog.toml)".to_string(),
+                    _ => "error: retrieve_context is not configured (set RAG_BASE_URL or rag_base_url in .clawc-analog.toml)".to_string(),
                 }
             } else {
                 dispatch_tool(
@@ -1723,7 +1723,7 @@ pub fn glob_workspace_collect(
         .git_exclude(true)
         .ignore(true)
         .hidden(false)
-        .add_custom_ignore_filename(".clawignore");
+        .add_custom_ignore_filename(".clawcignore");
     for result in walker.build() {
         let entry = match result {
             Ok(e) => e,
@@ -2009,7 +2009,7 @@ pub fn dispatch_tool(
             if let Err(e) = assert_workspace_path(workspace, &full) {
                 return format!("error: {e}");
             }
-            // Use ignore-aware walker to respect .gitignore/.clawignore.
+            // Use ignore-aware walker to respect .gitignore/.clawcignore.
             let mut walker = WalkBuilder::new(&full);
             walker
                 .follow_links(false)
@@ -2018,7 +2018,7 @@ pub fn dispatch_tool(
                 .git_exclude(true)
                 .ignore(true)
                 .hidden(false)
-                .add_custom_ignore_filename(".clawignore");
+                .add_custom_ignore_filename(".clawcignore");
             let mut names: Vec<String> = walker
                 .build()
                 .filter_map(|r| r.ok())
@@ -2371,7 +2371,7 @@ mod tests {
         // The ignore walker enables gitignore semantics more consistently when a repo root is present.
         std::fs::create_dir_all(root.join(".git")).unwrap();
         std::fs::write(root.join(".gitignore"), "node_modules/\n").unwrap();
-        std::fs::write(root.join(".clawignore"), "ignored_dir/\n").unwrap();
+        std::fs::write(root.join(".clawcignore"), "ignored_dir/\n").unwrap();
 
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::write(root.join("src/kept.rs"), "").unwrap();
@@ -2657,7 +2657,7 @@ mod tests {
     #[test]
     fn load_analog_toml_parses() {
         let dir = tempfile::tempdir().unwrap();
-        let p = dir.path().join(".claw-analog.toml");
+        let p = dir.path().join(".clawc-analog.toml");
         std::fs::write(
             &p,
             r#"

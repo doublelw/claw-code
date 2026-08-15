@@ -35,7 +35,7 @@ enum Cmd {
 
 #[derive(Parser)]
 struct ServeArgs {
-    #[arg(long, env = "CLAW_RAG_DB", default_value = ".claw-rag/index.sqlite")]
+    #[arg(long, env = "CLAW_RAG_DB", default_value = ".clawc-rag/index.sqlite")]
     db: PathBuf,
 }
 
@@ -44,7 +44,7 @@ struct IngestArgs {
     /// Workspace roots to ingest. Repeat `--workspace` to ingest multiple repos (cross-repo RAG).
     #[arg(short, long)]
     workspace: Vec<PathBuf>,
-    #[arg(long, env = "CLAW_RAG_DB", default_value = ".claw-rag/index.sqlite")]
+    #[arg(long, env = "CLAW_RAG_DB", default_value = ".clawc-rag/index.sqlite")]
     db: PathBuf,
 }
 
@@ -101,7 +101,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         s.db
     } else {
         PathBuf::from(
-            std::env::var("CLAW_RAG_DB").unwrap_or_else(|_| ".claw-rag/index.sqlite".into()),
+            std::env::var("CLAW_RAG_DB").unwrap_or_else(|_| ".clawc-rag/index.sqlite".into()),
         )
     };
 

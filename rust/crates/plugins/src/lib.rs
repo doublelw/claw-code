@@ -1698,7 +1698,7 @@ fn detect_claude_code_manifest_contract_gaps(
     for (field, detail) in [
         (
             "skills",
-            "plugin manifest field `skills` uses the Claude Code plugin contract; `claw` does not load plugin-managed skills and instead discovers skills from local roots such as `.claw/skills`, `.omc/skills`, `.agents/skills`, `~/.omc/skills`, and `~/.claude/skills/omc-learned`.",
+            "plugin manifest field `skills` uses the Claude Code plugin contract; `claw` does not load plugin-managed skills and instead discovers skills from local roots such as `.clawc/skills`, `.omc/skills`, `.agents/skills`, `~/.omc/skills`, and `~/.claude/skills/omc-learned`.",
         ),
         (
             "mcpServers",
@@ -3723,7 +3723,7 @@ mod tests {
     }
 
     /// Regression test for ROADMAP #41: verify that `CLAW_CONFIG_HOME` isolation prevents
-    /// host `~/.claw/plugins/` from bleeding into test runs.
+    /// host `~/.clawc/plugins/` from bleeding into test runs.
     #[test]
     fn claw_config_home_isolation_prevents_host_plugin_leakage() {
         let _guard = env_guard();
@@ -3747,7 +3747,7 @@ mod tests {
 }"#,
         );
 
-        // Create PluginManager with isolated bundled_root - it should use the temp config_home, not host ~/.claw/
+        // Create PluginManager with isolated bundled_root - it should use the temp config_home, not host ~/.clawc/
         let mut config = PluginManagerConfig::new(&config_home);
         config.bundled_root = Some(bundled_root.clone());
         let manager = PluginManager::new(config);
@@ -3761,7 +3761,7 @@ mod tests {
         assert_eq!(
             installed.len(),
             1,
-            "should only see the test fixture plugin, not host ~/.claw/plugins/"
+            "should only see the test fixture plugin, not host ~/.clawc/plugins/"
         );
         assert_eq!(
             installed[0].metadata.id, "isolated-test-plugin@external",

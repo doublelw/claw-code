@@ -1137,8 +1137,8 @@ mod tests {
             .as_nanos();
         let root = std::env::temp_dir().join(format!("api-plugin-max-tokens-{nanos}"));
         let cwd = root.join("project");
-        let home = root.join("home").join(".claw");
-        std::fs::create_dir_all(cwd.join(".claw")).expect("project config dir");
+        let home = root.join("home").join(".clawc");
+        std::fs::create_dir_all(cwd.join(".clawc")).expect("project config dir");
         std::fs::create_dir_all(&home).expect("home config dir");
         std::fs::write(
             home.join("settings.json"),

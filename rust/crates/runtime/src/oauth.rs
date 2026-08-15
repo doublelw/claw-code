@@ -343,7 +343,7 @@ fn credentials_home_dir() -> io::Result<PathBuf> {
                  or use CLAW_CONFIG_HOME to point directly at the config directory)",
             )
         })?;
-    Ok(PathBuf::from(home).join(".claw"))
+    Ok(PathBuf::from(home).join(".clawc"))
 }
 
 fn read_credentials_root(path: &PathBuf) -> io::Result<Map<String, Value>> {

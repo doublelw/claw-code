@@ -99,7 +99,7 @@ enum Commands {
 
 #[derive(Subcommand, Debug)]
 enum ConfigSub {
-    /// Parse `.claw-analog.toml` and profile; print a merge preview (no API calls).
+    /// Parse `.clawc-analog.toml` and profile; print a merge preview (no API calls).
     Validate(config_cmd::ValidateCli),
 }
 
@@ -120,7 +120,7 @@ enum ShellKind {
 
 #[derive(Parser, Debug)]
 struct RunCli {
-    /// Config file (default: `<workspace>/.claw-analog.toml` if that path exists).
+    /// Config file (default: `<workspace>/.clawc-analog.toml` if that path exists).
     #[arg(long, value_name = "PATH")]
     config: Option<PathBuf>,
     #[arg(short, long)]
@@ -143,7 +143,7 @@ struct RunCli {
     /// Write session JSON to this path on each snapshot (export without `--session`, or an extra copy).
     #[arg(long, value_name = "PATH")]
     save_session: Option<PathBuf>,
-    /// Profile snippet TOML (`line = "..."`). Default: `~/.claw-analog/profile.toml` if it exists.
+    /// Profile snippet TOML (`line = "..."`). Default: `~/.clawc-analog/profile.toml` if it exists.
     #[arg(long, value_name = "PATH")]
     profile: Option<PathBuf>,
     /// Stream assistant text to stdout as tokens arrive (uses `stream_message`).
@@ -189,7 +189,7 @@ const RAG_TOP_K_ABS_CAP: u32 = 256;
 fn config_file_path(cli: &RunCli) -> PathBuf {
     cli.config
         .clone()
-        .unwrap_or_else(|| cli.workspace.join(".claw-analog.toml"))
+        .unwrap_or_else(|| cli.workspace.join(".clawc-analog.toml"))
 }
 
 fn load_file_config(path: &Path) -> AnalogFileConfig {

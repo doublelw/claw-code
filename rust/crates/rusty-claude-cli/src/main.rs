@@ -7605,6 +7605,29 @@ impl LiveCli {
     }
 }
 
+/// v2.1.232: resolve a session name against the set of live session names.
+/// If `desired` collides with a live session, return a unique
+/// `name-word-word` variant; otherwise return `desired` unchanged.
+/// `word_for` maps an index to a suffix word (callers pass a stable wordlist
+/// so results are deterministic).
+#[must_use]
+pub fn unique_session_name<F>(desired: &str, live_names: &[String], word_for: F) -> String
+where
+    F: Fn(usize) -> String,
+{
+    if !live_names.iter().any(|n| n == desired) {
+        return desired.to_string();
+    }
+    // name-word-word variants until one is free.
+    for i in 0..live_names.len().saturating_add(1).max(16) {
+        let candidate = format!("{}-{}-{}", desired, word_for(i * 2), word_for(i * 2 + 1));
+        if !live_names.iter().any(|n| n == &candidate) {
+            return candidate;
+        }
+    }
+    desired.to_string()
+}
+
 fn should_trigger_workflow(user_message: &str, effort: &runtime::EffortLevel) -> bool {
     let lower = user_message.to_lowercase();
     // v2.1.210: keyword opt-in does not fire on non-human input; the effort
@@ -17335,7 +17358,8 @@ mod dump_manifests_tests {
 mod alias_resolution_tests {
     use super::{
         deprecated_model_replacement, is_fable_5, looks_non_human, normalize_model_name,
-        permission_mode_display, resolve_model_alias_with_config, validate_model_syntax,
+        permission_mode_display, resolve_model_alias_with_config, unique_session_name,
+        validate_model_syntax,
     };
 
     #[test]
@@ -17529,5 +17553,32 @@ mod alias_resolution_tests {
     fn human_prompt_is_not_non_human() {
         assert!(!looks_non_human("please ultracode this task"));
         assert!(!looks_non_human("do a deep research on rust async"));
+    }
+
+    // --- v2.1.232: session unique names ---
+
+    #[test]
+    fn unique_session_name_unchanged_when_free() {
+        let live = vec!["alpha".to_string(), "beta".to_string()];
+        assert_eq!(
+            unique_session_name("gamma", &live, |i| format!("w{i}")),
+            "gamma"
+        );
+    }
+
+    #[test]
+    fn unique_session_name_variant_on_collision() {
+        let live = vec!["alpha".to_string()];
+        let got = unique_session_name("alpha", &live, |i| format!("w{i}"));
+        assert_eq!(got, "alpha-w0-w1");
+        assert_ne!(got, "alpha");
+    }
+
+    #[test]
+    fn unique_session_name_skips_taken_variants() {
+        // First variant already taken → second variant used.
+        let live = vec!["alpha".to_string(), "alpha-w0-w1".to_string()];
+        let got = unique_session_name("alpha", &live, |i| format!("w{i}"));
+        assert_eq!(got, "alpha-w2-w3");
     }
 }

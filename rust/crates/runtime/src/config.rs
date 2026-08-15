@@ -106,6 +106,12 @@ pub struct RuntimeFeatureConfig {
     /// v2.1.212: per-session cap on subagent spawns (stops runaway delegation).
     /// 0 = unlimited.
     max_subagents_per_session: u32,
+    /// v2.1.233: opt-in memory cgroup limit for Bash tool commands, in MiB
+    /// (Linux only). 0 = disabled.
+    tool_memory_limit_mib: u32,
+    /// v2.1.233: WebFetch session URL cache TTL in milliseconds
+    /// (`CLAUDE_CODE_WEBFETCH_CACHE_TTL_MS`). Default 15 minutes.
+    webfetch_cache_ttl_ms: u32,
 }
 
 /// Ordered chain of fallback model identifiers used when the primary
@@ -415,6 +421,13 @@ impl ConfigLoader {
                 "CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION",
                 200,
             ),
+            // v2.1.233: opt-in Bash memory cgroup limit (MiB, Linux); 0 = off.
+            tool_memory_limit_mib: session_cap_from_env("CLAUDE_CODE_TOOL_MEMORY_LIMIT", 0),
+            // v2.1.233: WebFetch session URL cache TTL (ms); default 15 min.
+            webfetch_cache_ttl_ms: session_cap_from_env(
+                "CLAUDE_CODE_WEBFETCH_CACHE_TTL_MS",
+                15 * 60 * 1000,
+            ),
         };
 
         Ok(RuntimeConfig {
@@ -515,6 +528,13 @@ impl ConfigLoader {
             max_subagents_per_session: session_cap_from_env(
                 "CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION",
                 200,
+            ),
+            // v2.1.233: opt-in Bash memory cgroup limit (MiB, Linux); 0 = off.
+            tool_memory_limit_mib: session_cap_from_env("CLAUDE_CODE_TOOL_MEMORY_LIMIT", 0),
+            // v2.1.233: WebFetch session URL cache TTL (ms); default 15 min.
+            webfetch_cache_ttl_ms: session_cap_from_env(
+                "CLAUDE_CODE_WEBFETCH_CACHE_TTL_MS",
+                15 * 60 * 1000,
             ),
         };
 
@@ -707,6 +727,18 @@ impl RuntimeConfig {
         self.feature_config.max_subagents_per_session()
     }
 
+    /// v2.1.233: Bash tool memory cgroup limit in MiB (0 = disabled).
+    #[must_use]
+    pub fn tool_memory_limit_mib(&self) -> u32 {
+        self.feature_config.tool_memory_limit_mib()
+    }
+
+    /// v2.1.233: WebFetch session URL cache TTL in milliseconds.
+    #[must_use]
+    pub fn webfetch_cache_ttl_ms(&self) -> u32 {
+        self.feature_config.webfetch_cache_ttl_ms()
+    }
+
     /// Merge config-level default trusted roots with per-call roots.
     ///
     /// Config roots are defaults and are kept first; per-call roots extend the
@@ -880,6 +912,18 @@ impl RuntimeFeatureConfig {
     #[must_use]
     pub fn max_subagents_per_session(&self) -> u32 {
         self.max_subagents_per_session
+    }
+
+    /// v2.1.233: Bash tool memory cgroup limit in MiB (0 = disabled).
+    #[must_use]
+    pub fn tool_memory_limit_mib(&self) -> u32 {
+        self.tool_memory_limit_mib
+    }
+
+    /// v2.1.233: WebFetch session URL cache TTL in milliseconds.
+    #[must_use]
+    pub fn webfetch_cache_ttl_ms(&self) -> u32 {
+        self.webfetch_cache_ttl_ms
     }
 
     /// Merge this config's default trusted roots with per-call roots.
@@ -3179,6 +3223,31 @@ mod tests {
             .expect("config should load");
         assert!(loaded.max_web_searches_per_session() > 0);
         assert!(loaded.max_subagents_per_session() > 0);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn v2233_env_defaults() {
+        // v2.1.233: memory limit off by default; WebFetch TTL 15 min.
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let home = root.join("home").join(".claw");
+        fs::create_dir_all(&home).expect("home config dir");
+        fs::create_dir_all(&cwd).expect("project dir");
+        fs::write(home.join("settings.json"), "{}").expect("write settings");
+        let loaded = ConfigLoader::new(&cwd, &home)
+            .load()
+            .expect("config should load");
+        assert_eq!(
+            loaded.tool_memory_limit_mib(),
+            0,
+            "memory limit off by default"
+        );
+        assert_eq!(
+            loaded.webfetch_cache_ttl_ms(),
+            900_000,
+            "WebFetch TTL default 15min"
+        );
         fs::remove_dir_all(root).expect("cleanup");
     }
 

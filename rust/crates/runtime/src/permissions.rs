@@ -537,6 +537,59 @@ fn is_unicode_bidi_or_invisible(c: char) -> bool {
     )
 }
 
+/// v2.1.232: token-family prefixes redacted from previews/output.
+/// GitLab token families + GitHub/routable classics.
+const SECRET_TOKEN_PREFIXES: &[&str] = &[
+    // GitLab families (v2.1.232)
+    "glrt-", "gloas-", "glptt-", "glagent-", "glimt-", "glsoat-", "glcbt-", "glft-", "glffct-",
+    "glpat-", "gldt-", // GitHub
+    "ghp_", "gho_", "ghu_", "ghs_", "ghr_", // Anthropic / OpenAI style keys
+    "sk-ant-", "sk-",
+];
+
+/// v2.1.232: redact bearer/secret tokens from a string before display or
+/// logging. Tokens from known families keep their prefix (so the operator can
+/// see which family leaked) but the body is replaced with `<redacted>`.
+#[must_use]
+pub fn redact_secrets(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let bytes = input.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        // Find the longest matching token prefix at position i.
+        let matched = SECRET_TOKEN_PREFIXES
+            .iter()
+            .filter(|p| input[i..].starts_with(**p))
+            .max_by_key(|p| p.len());
+        match matched {
+            Some(prefix) => {
+                let body_start = i + prefix.len();
+                let body_end = input[body_start..]
+                    .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-'))
+                    .map(|idx| body_start + idx)
+                    .unwrap_or(input.len());
+                if body_end > body_start {
+                    // Real token body → keep prefix, redact body.
+                    out.push_str(prefix);
+                    out.push_str("<redacted>");
+                    i = body_end;
+                } else {
+                    // Bare prefix with no body → pass through unchanged.
+                    out.push_str(prefix);
+                    i = body_start;
+                }
+            }
+            None => {
+                // Copy one char (UTF-8 safe).
+                let ch = input[i..].chars().next().unwrap_or('\u{FFFD}');
+                out.push(ch);
+                i += ch.len_utf8();
+            }
+        }
+    }
+    out
+}
+
 fn unescape_rule_content(content: &str) -> String {
     content
         .replace(r"\(", "(")
@@ -607,9 +660,9 @@ fn extract_permission_subject(input: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        neutralize_tool_input_preview, PermissionContext, PermissionMode, PermissionOutcome,
-        PermissionOverride, PermissionPolicy, PermissionPromptDecision, PermissionPrompter,
-        PermissionRequest,
+        neutralize_tool_input_preview, redact_secrets, PermissionContext, PermissionMode,
+        PermissionOutcome, PermissionOverride, PermissionPolicy, PermissionPromptDecision,
+        PermissionPrompter, PermissionRequest,
     };
     use crate::config::RuntimePermissionRuleConfig;
 
@@ -852,6 +905,49 @@ mod tests {
         );
         // collapsed space runs
         assert_eq!(neutralize_tool_input_preview("a   b"), "a b");
+    }
+
+    // --- v2.1.232: GitLab token redaction ---
+
+    #[test]
+    fn redacts_gitlab_token_families() {
+        assert_eq!(
+            redact_secrets("token: glrt-abc123XYZ_end"),
+            "token: glrt-<redacted>"
+        );
+        assert_eq!(
+            redact_secrets("export GL_PAT=glpat-deadbeef42"),
+            "export GL_PAT=glpat-<redacted>"
+        );
+        assert_eq!(
+            redact_secrets("gldt-1AbC_dEf-99 leaked"),
+            "gldt-<redacted> leaked"
+        );
+    }
+
+    #[test]
+    fn redacts_github_and_anthropic_tokens() {
+        assert_eq!(redact_secrets("ghp_abc123def456"), "ghp_<redacted>");
+        // Longest-prefix wins: sk-ant- is not mis-split as sk-
+        assert_eq!(
+            redact_secrets("key sk-ant-api03-xyz9"),
+            "key sk-ant-<redacted>"
+        );
+    }
+
+    #[test]
+    fn redacts_multiple_tokens_in_one_string() {
+        assert_eq!(
+            redact_secrets("a glptt-111 b ghp_222 c"),
+            "a glptt-<redacted> b ghp-<redacted> c".replace("ghp-", "ghp_")
+        );
+    }
+
+    #[test]
+    fn plain_text_untouched() {
+        assert_eq!(redact_secrets("echo hello world"), "echo hello world");
+        // A bare prefix with no token body passes through.
+        assert_eq!(redact_secrets("glpat- alone"), "glpat- alone");
     }
 
     #[test]

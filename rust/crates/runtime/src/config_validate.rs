@@ -289,6 +289,35 @@ const TOP_LEVEL_FIELDS: &[FieldSpec] = &[
         name: "emojiCompletionEnabled",
         expected: FieldType::Bool,
     },
+    // v2.1.235: aspell/hunspell spellcheck in the prompt input.
+    FieldSpec {
+        name: "spellcheck",
+        expected: FieldType::Bool,
+    },
+    // v2.1.238: "readline" Ctrl+W behavior flavor.
+    FieldSpec {
+        name: "keybindingFlavor",
+        expected: FieldType::String,
+    },
+    // v2.1.243: curated /model picker list.
+    FieldSpec {
+        name: "modelPicker",
+        expected: FieldType::StringArray,
+    },
+    // v2.1.243: prompt-cache TTL overrides.
+    FieldSpec {
+        name: "promptCacheTtl",
+        expected: FieldType::String,
+    },
+    FieldSpec {
+        name: "subagentPromptCacheTtl",
+        expected: FieldType::String,
+    },
+    // v2.1.243: contracted per-model rates for /cost.
+    FieldSpec {
+        name: "modelPricing",
+        expected: FieldType::Object,
+    },
 ];
 
 const WORKFLOW_FIELDS: &[FieldSpec] = &[FieldSpec {

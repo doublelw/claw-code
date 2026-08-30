@@ -538,6 +538,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         std::env::set_var("CLAW_SAFE_MODE", "1");
         eprintln!("⚠️  Safe mode active: CLAUDE.md, plugins, skills, hooks, and MCP servers are disabled.");
     }
+    // v2.1.248: --restricted / CLAUDE_CODE_RESTRICTED removes command-execution
+    // tools and WebFetch from dispatch, and keeps file tools workspace-bound.
+    if args.iter().any(|a| a == "--restricted")
+        || std::env::var("CLAWC_RESTRICTED").as_deref() == Ok("1")
+        || std::env::var("CLAUDE_CODE_RESTRICTED").as_deref() == Ok("1")
+    {
+        std::env::set_var("CLAWC_RESTRICTED", "1");
+        eprintln!("🔒 Restricted mode: command-execution tools and WebFetch are disabled; file tools stay inside the working directory.");
+    }
     match parse_args(&args)? {
         CliAction::DumpManifests {
             output_format,
@@ -998,6 +1007,11 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
             }
             "--safe-mode" => {
                 // v2.1.169: run() reads this flag and sets CLAW_SAFE_MODE env.
+                index += 1;
+            }
+            "--restricted" => {
+                // v2.1.248: restricted mode — run() sets CLAWC_RESTRICTED so
+                // tool dispatch drops command-execution tools + WebFetch.
                 index += 1;
             }
             "-p" => {
@@ -2184,6 +2198,15 @@ fn resolve_repl_model(cli_model: String) -> String {
         .filter(|value| !value.is_empty())
     {
         return resolve_model_alias_with_config(&env_model);
+    }
+    // v2.1.236: ANTHROPIC_DEFAULT_MODEL sets the model new sessions start on
+    // (a /model pick still overrides and persists, unlike ANTHROPIC_MODEL).
+    if let Some(default_model) = env::var("ANTHROPIC_DEFAULT_MODEL")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    {
+        return resolve_model_alias_with_config(&default_model);
     }
     if let Some(config_model) = config_model_for_current_dir() {
         return resolve_model_alias_with_config(&config_model);

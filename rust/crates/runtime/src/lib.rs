@@ -140,9 +140,9 @@ pub use oauth::{
     PkceChallengeMethod, PkceCodePair,
 };
 pub use permissions::{
-    neutralize_tool_input_preview, redact_secrets, PermissionContext, PermissionMode,
-    PermissionOutcome, PermissionOverride, PermissionPolicy, PermissionPromptDecision,
-    PermissionPrompter, PermissionRequest,
+    bash_rule_wildcard_warning, neutralize_tool_input_preview, redact_secrets, PermissionContext,
+    PermissionMode, PermissionOutcome, PermissionOverride, PermissionPolicy,
+    PermissionPromptDecision, PermissionPrompter, PermissionRequest,
 };
 pub use plugin_lifecycle::{
     DegradedMode, DiscoveryResult, PluginHealthcheck, PluginLifecycle, PluginLifecycleEvent,

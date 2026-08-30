@@ -4,6 +4,15 @@ use std::path::Path;
 /// approval — the prefix analyzer cannot safely judge them.
 const MAX_AUTO_BASH_COMMAND_LEN: usize = 10_000;
 
+/// v2.1.248: true when restricted mode is active (`--restricted` flag or
+/// `CLAWC_RESTRICTED` / `CLAUDE_CODE_RESTRICTED` env). In restricted mode the
+/// classifier denies command-execution tools (bash/PowerShell) and WebFetch;
+/// file tools remain available but workspace-bound.
+pub fn restricted_mode_active() -> bool {
+    std::env::var("CLAWC_RESTRICTED").as_deref() == Ok("1")
+        || std::env::var("CLAUDE_CODE_RESTRICTED").as_deref() == Ok("1")
+}
+
 fn extract_json_field(input: &str, field: &str) -> Option<String> {
     let pattern = format!("\"{}\":", field);
     let start = input.find(&pattern)?;
@@ -48,6 +57,13 @@ impl PermissionClassifier {
     }
 
     pub fn classify(&self, tool_name: &str, input: &str) -> Classification {
+        // v2.1.248: restricted mode removes tools that run commands or code
+        // and WebFetch; file tools stay but remain workspace-bound.
+        if restricted_mode_active() {
+            if matches!(tool_name, "bash" | "PowerShell" | "WebFetch") {
+                return Classification::Deny;
+            }
+        }
         match tool_name {
             "bash" | "PowerShell" => {
                 let command =
@@ -227,6 +243,13 @@ impl PermissionClassifier {
             return Classification::Deny;
         }
 
+        // v2.1.234: reject Windows NT-namespace paths (`\\?\` / `\\.\`).
+        // These bypass path normalization and can target raw device objects —
+        // the NTLM credential-leak hardening.
+        if Self::is_nt_namespace_path(&lower) {
+            return Classification::Deny;
+        }
+
         if self.workspace_root.is_some() {
             if lower.contains("../") || lower.contains("..\\") {
                 return Classification::Deny;
@@ -244,6 +267,13 @@ impl PermissionClassifier {
         (lower.contains("/sessions/") || lower.contains("\\sessions\\"))
             && lower.contains("session-")
             && lower.contains(".jsonl")
+    }
+
+    /// v2.1.234: detect Windows NT-namespace device paths (`\\?\` prefix or
+    /// `\\.\` device prefix) which bypass path normalization. These must never
+    /// reach a file read/write — the NTLM credential-leak vector.
+    fn is_nt_namespace_path(lower: &str) -> bool {
+        lower.contains("\\\\?\\") || lower.contains("\\\\.\\")
     }
 
     /// v2.1.221/223: detect commands that can hide executable content from the
@@ -626,6 +656,75 @@ mod tests {
         // Normal commands are not flagged as evasive.
         assert_eq!(
             classifier().classify("bash", r#"{"command":"ls -la"}"#),
+            Classification::Allow
+        );
+    }
+
+    // --- v2.1.248: restricted mode ---
+
+    #[test]
+    fn restricted_mode_denies_command_and_webfetch_tools() {
+        std::env::set_var("CLAWC_RESTRICTED", "1");
+        assert_eq!(
+            classifier().classify("bash", r#"{"command":"ls"}"#),
+            Classification::Deny
+        );
+        assert_eq!(
+            classifier().classify("PowerShell", r#"{"command":"ls"}"#),
+            Classification::Deny
+        );
+        assert_eq!(
+            classifier().classify("WebFetch", r#"{"url":"http://x"}"#),
+            Classification::Deny
+        );
+        // File tools remain available.
+        assert_eq!(
+            classifier().classify("read_file", r#"{"path":"src/main.rs"}"#),
+            Classification::Allow
+        );
+        std::env::remove_var("CLAWC_RESTRICTED");
+    }
+
+    #[test]
+    fn unrestricted_mode_allows_normal_flow() {
+        std::env::remove_var("CLAWC_RESTRICTED");
+        std::env::remove_var("CLAUDE_CODE_RESTRICTED");
+        assert_eq!(
+            classifier().classify("bash", r#"{"command":"cat README.md"}"#),
+            Classification::Allow
+        );
+    }
+
+    // --- v2.1.234: NT-namespace path rejection ---
+
+    #[test]
+    fn nt_namespace_path_write_denied() {
+        // `\\?\C:\...` bypasses path normalization → deny.
+        assert_eq!(
+            classifier().classify(
+                "write_file",
+                r#"{"path":"\\\\?\\C:\\Windows\\system32\\config\\sam","content":"x"}"#,
+            ),
+            Classification::Deny
+        );
+    }
+
+    #[test]
+    fn nt_device_path_read_target_denied() {
+        assert_eq!(
+            classifier().classify("edit_file", r#"{"path":"\\\\.\\PhysicalDrive0"}"#,),
+            Classification::Deny
+        );
+    }
+
+    #[test]
+    fn normal_windows_path_allowed_flow() {
+        // A normal relative path is unaffected by the NT guard.
+        assert_eq!(
+            classifier().classify(
+                "write_file",
+                r#"{"path":"src\\module\\file.rs","content":"fn main(){}"}"#,
+            ),
             Classification::Allow
         );
     }

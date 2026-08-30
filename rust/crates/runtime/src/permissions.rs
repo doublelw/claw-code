@@ -485,8 +485,47 @@ fn extract_tool_param(input: &str, key: &str) -> Option<String> {
 /// Strips Unicode bidi-control / zero-width / format characters and replaces
 /// look-alike quotation marks with ASCII equivalents, so a malicious tool input
 /// cannot visually alter the approval message (e.g. hide a `rm -rf` behind a
-/// RTL override). The returned string is safe to show to the user as the
-/// canonical representation of what will run.
+/// v2.1.246: return a warning for a Bash allow rule that places a wildcard
+/// BEFORE the subcommand (e.g. `Bash(git * main)`). Such rules also match
+/// options inserted before the subcommand, making them far broader than the
+/// author intended. Returns `None` for well-formed rules.
+#[must_use]
+pub fn bash_rule_wildcard_warning(rule: &str) -> Option<String> {
+    let trimmed = rule.trim();
+    // Only Bash/PowerShell rules pass subcommands through a shell; file-path
+    // globs (Edit(src/**)) are unaffected and never warned.
+    let lower = trimmed.to_ascii_lowercase();
+    if !(lower.starts_with("bash(") || lower.starts_with("powershell(")) {
+        return None;
+    }
+    let open = trimmed.find('(')?;
+    let close = trimmed.rfind(')')?;
+    if close <= open {
+        return None;
+    }
+    let content = &trimmed[open + 1..close];
+    // A wildcard in anything other than the final position of the pattern
+    // (i.e. a `*` followed by more non-wildcard content after a space)
+    // widens the rule to match inserted options.
+    if let Some(star) = content.find('*') {
+        let after = &content[star + 1..];
+        // `:*` suffix (a trailing prefix-glob) is fine; a bare `*` or a `*`
+        // followed by more pattern text is the risky form.
+        if after.is_empty() || after == ":" || after == ":*" {
+            return None;
+        }
+        return Some(format!(
+            "allow rule '{trimmed}' places a wildcard before later content; it will also match options inserted before the subcommand (e.g. `git --exec=... {after}`)"
+        ));
+    }
+    None
+}
+
+/// v2.1.211: strips Unicode bidi-control / zero-width / format characters and
+/// replaces look-alike quotation marks with ASCII equivalents, so a malicious
+/// tool input cannot visually alter the approval message (e.g. hide a `rm -rf`
+/// behind a RTL override). The returned string is safe to show to the user as
+/// the canonical representation of what will run.
 ///
 /// v2.1.223: runs of tabs / control whitespace are collapsed to a single space
 /// so padding can no longer hide part of a command in the approval dialog.
@@ -660,9 +699,9 @@ fn extract_permission_subject(input: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        neutralize_tool_input_preview, redact_secrets, PermissionContext, PermissionMode,
-        PermissionOutcome, PermissionOverride, PermissionPolicy, PermissionPromptDecision,
-        PermissionPrompter, PermissionRequest,
+        bash_rule_wildcard_warning, neutralize_tool_input_preview, redact_secrets,
+        PermissionContext, PermissionMode, PermissionOutcome, PermissionOverride, PermissionPolicy,
+        PermissionPromptDecision, PermissionPrompter, PermissionRequest,
     };
     use crate::config::RuntimePermissionRuleConfig;
 
@@ -948,6 +987,28 @@ mod tests {
         assert_eq!(redact_secrets("echo hello world"), "echo hello world");
         // A bare prefix with no token body passes through.
         assert_eq!(redact_secrets("glpat- alone"), "glpat- alone");
+    }
+
+    // --- v2.1.246: Bash rule wildcard-before-subcommand warning ---
+
+    #[test]
+    fn wildcard_before_subcommand_warns() {
+        let warn = bash_rule_wildcard_warning("Bash(git * main)");
+        assert!(warn.is_some());
+        assert!(warn.unwrap().contains("wildcard before later content"));
+    }
+
+    #[test]
+    fn trailing_prefix_glob_not_warned() {
+        // `git:*` (prefix glob) and `git status` (exact) are well-formed.
+        assert_eq!(bash_rule_wildcard_warning("Bash(git:*)"), None);
+        assert_eq!(bash_rule_wildcard_warning("Bash(git status)"), None);
+        assert_eq!(bash_rule_wildcard_warning("Bash(git *)"), None);
+    }
+
+    #[test]
+    fn non_bash_rules_no_warning() {
+        assert_eq!(bash_rule_wildcard_warning("Edit(src/**)"), None);
     }
 
     #[test]

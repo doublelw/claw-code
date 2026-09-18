@@ -13,6 +13,30 @@ pub fn restricted_mode_active() -> bool {
         || std::env::var("CLAUDE_CODE_RESTRICTED").as_deref() == Ok("1")
 }
 
+/// v2.1.257: cloud metadata-credential endpoints targeted by the Containment
+/// Escape rule. Fetching these from a compromised session is the classic
+/// SSRF→credential-theft vector (AWS IMDS, GCP, Azure, Alibaba, k8s).
+const METADATA_ENDPOINT_MARKERS: &[&str] = &[
+    "169.254.169.254", // AWS/GCP/Azure link-local metadata
+    "100.100.100.200", // Alibaba Cloud metadata
+    "metadata.google.internal",
+    "metadata.goog",
+    "metadata.azure.com",
+    "metadata.azure.microsoft.com",
+    "100.88.88.88",        // Tencent Cloud metadata
+    "/latest/api/token",   // IMDSv2 token path
+    "/computeMetadata/v1", // GCP metadata path
+];
+
+/// v2.1.257: true when the input references a cloud metadata-credential
+/// endpoint. Such calls are denied outright instead of prompted.
+pub fn targets_metadata_endpoint(input: &str) -> bool {
+    let lower = input.to_ascii_lowercase();
+    METADATA_ENDPOINT_MARKERS
+        .iter()
+        .any(|marker| lower.contains(marker))
+}
+
 fn extract_json_field(input: &str, field: &str) -> Option<String> {
     let pattern = format!("\"{}\":", field);
     let start = input.find(&pattern)?;
@@ -57,12 +81,30 @@ impl PermissionClassifier {
     }
 
     pub fn classify(&self, tool_name: &str, input: &str) -> Classification {
+        let classified = self.classify_inner(tool_name, input);
+        // v2.1.259: with `--permission-prompts none`, anything that would
+        // prompt is denied outright (unattended hosts).
+        let prompts_disabled = std::env::var("CLAWC_PERMISSION_PROMPTS").as_deref() == Ok("none");
+        match (classified, prompts_disabled) {
+            (Classification::Prompt, true) => Classification::Deny,
+            (other, _) => other,
+        }
+    }
+
+    fn classify_inner(&self, tool_name: &str, input: &str) -> Classification {
         // v2.1.248: restricted mode removes tools that run commands or code
         // and WebFetch; file tools stay but remain workspace-bound.
         if restricted_mode_active() {
             if matches!(tool_name, "bash" | "PowerShell" | "WebFetch") {
                 return Classification::Deny;
             }
+        }
+        // v2.1.257: Containment Escape — cloud metadata-credential endpoints
+        // are never auto-approved; commands/fetches touching them are denied.
+        if matches!(tool_name, "bash" | "PowerShell" | "WebFetch" | "WebSearch")
+            && targets_metadata_endpoint(input)
+        {
+            return Classification::Deny;
         }
         match tool_name {
             "bash" | "PowerShell" => {
@@ -727,5 +769,87 @@ mod tests {
             ),
             Classification::Allow
         );
+    }
+
+    // --- v2.1.257: Containment Escape (metadata endpoints) ---
+
+    #[test]
+    fn aws_metadata_fetch_denied() {
+        assert_eq!(
+            classifier().classify(
+                "WebFetch",
+                r#"{"url":"http://169.254.169.254/latest/meta-data/iam/security-credentials/"}"#,
+            ),
+            Classification::Deny
+        );
+    }
+
+    #[test]
+    fn gcp_metadata_and_imdsv2_token_denied() {
+        assert_eq!(
+            classifier().classify(
+                "WebFetch",
+                r#"{"url":"http://metadata.google.internal/computeMetadata/v1/token"}"#,
+            ),
+            Classification::Deny
+        );
+        assert_eq!(
+            classifier().classify(
+                "bash",
+                r#"{"command":"curl -X PUT http://169.254.169.254/latest/api/token"}"#,
+            ),
+            Classification::Deny
+        );
+    }
+
+    #[test]
+    fn alibaba_azure_metadata_denied() {
+        assert_eq!(
+            classifier().classify(
+                "bash",
+                r#"{"command":"curl http://100.100.100.200/latest/meta-data/"}"#,
+            ),
+            Classification::Deny
+        );
+        assert_eq!(
+            classifier().classify(
+                "WebFetch",
+                r#"{"url":"http://metadata.azure.com/metadata/instance"}"#,
+            ),
+            Classification::Deny
+        );
+    }
+
+    #[test]
+    fn normal_webfetch_not_metadata_denied() {
+        // Ordinary URLs pass through to the normal Prompt path.
+        assert_eq!(
+            classifier().classify("WebFetch", r#"{"url":"https://docs.example.com/guide"}"#,),
+            Classification::Prompt
+        );
+    }
+
+    // --- v2.1.259: --permission-prompts none ---
+
+    #[test]
+    fn permission_prompts_none_denies_prompted_tools() {
+        std::env::set_var("CLAWC_PERMISSION_PROMPTS", "none");
+        // cargo build would normally Prompt; with prompts off it must Deny.
+        assert_eq!(
+            classifier().classify("bash", r#"{"command":"cargo build"}"#),
+            Classification::Deny
+        );
+        std::env::remove_var("CLAWC_PERMISSION_PROMPTS");
+    }
+
+    #[test]
+    fn permission_prompts_none_keeps_allow_flow() {
+        std::env::set_var("CLAWC_PERMISSION_PROMPTS", "none");
+        // Tools that auto-Allow are unaffected.
+        assert_eq!(
+            classifier().classify("bash", r#"{"command":"cat README.md"}"#),
+            Classification::Allow
+        );
+        std::env::remove_var("CLAWC_PERMISSION_PROMPTS");
     }
 }

@@ -79,6 +79,19 @@ fn registry() -> &'static Mutex<BTreeMap<String, Arc<Mutex<SharedState>>>> {
 
 static AGENT_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
+/// v2.1.269: per-run concurrent agent limit from
+/// `CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS` (1–256). Invalid or out-of
+/// range values fall back to the default of 16.
+fn workflow_concurrency_from_env() -> usize {
+    match std::env::var("CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+    {
+        Some(n) if (1..=256).contains(&n) => n,
+        _ => 16,
+    }
+}
+
 pub struct WorkflowRuntime {
     max_concurrent_agents: usize,
     max_total_agents: usize,
@@ -87,7 +100,7 @@ pub struct WorkflowRuntime {
 impl WorkflowRuntime {
     pub fn new() -> Self {
         Self {
-            max_concurrent_agents: 16,
+            max_concurrent_agents: workflow_concurrency_from_env(),
             max_total_agents: 1000,
         }
     }
@@ -460,6 +473,28 @@ mod tests {
             .unwrap();
         assert_eq!(result.status, WorkflowRunStatus::Completed);
         assert!(result.output.contains("hello world"));
+    }
+
+    // --- v2.1.269: workflow concurrency env ---
+    // Single sequential test: the env var is process-global, so parallel
+    // tests setting/removing it would clobber each other.
+
+    #[test]
+    fn workflow_concurrency_env_valid_and_invalid_values() {
+        std::env::set_var("CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS", "64");
+        assert_eq!(WorkflowRuntime::new().max_concurrent_agents, 64);
+        // Out of range (>256) → default
+        std::env::set_var("CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS", "9999");
+        assert_eq!(WorkflowRuntime::new().max_concurrent_agents, 16);
+        // Non-numeric → default
+        std::env::set_var("CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS", "abc");
+        assert_eq!(WorkflowRuntime::new().max_concurrent_agents, 16);
+        // Zero → default (1..=256 required)
+        std::env::set_var("CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS", "0");
+        assert_eq!(WorkflowRuntime::new().max_concurrent_agents, 16);
+        // Unset → default
+        std::env::remove_var("CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS");
+        assert_eq!(WorkflowRuntime::new().max_concurrent_agents, 16);
     }
 
     #[test]

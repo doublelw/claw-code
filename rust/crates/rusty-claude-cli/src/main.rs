@@ -1014,6 +1014,18 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
                 // tool dispatch drops command-execution tools + WebFetch.
                 index += 1;
             }
+            "--permission-prompts" => {
+                // v2.1.259: `none` denies anything that would prompt (unattended
+                // hosts). run() reads this flag via the CLAWC_PERMISSION_PROMPTS env.
+                let value = args.get(index + 1).map(String::as_str).unwrap_or("");
+                if value != "none" {
+                    return Err(format!(
+                        "invalid_flag_value: unsupported --permission-prompts value '{value}'.\nUsage: --permission-prompts none"
+                    ));
+                }
+                std::env::set_var("CLAWC_PERMISSION_PROMPTS", "none");
+                index += 2;
+            }
             "-p" => {
                 // Claw Code compat: -p "prompt" = one-shot prompt.
                 // #755: consume exactly one token so subsequent flags like
@@ -1988,7 +2000,9 @@ fn resolve_model_alias(model: &str) -> &str {
         // v2.1.197: Sonnet 5 is now the default Sonnet with native 1M context.
         "sonnet" => "anthropic/claude-sonnet-5",
         "haiku" => "anthropic/claude-haiku-4-5-20251213",
-        "fable" | "fable5" => "anthropic/claude-fable-5",
+        // v2.1.257: Fable 5.1 is now the default Fable model (1M context).
+        "fable" | "fable5" => "anthropic/claude-fable-5-1",
+        "fable5-1" | "fable-5-1" => "anthropic/claude-fable-5-1",
         _ => model,
     }
 }
@@ -2011,6 +2025,10 @@ pub fn deprecated_model_replacement(model: &str) -> Option<&'static str> {
     {
         return Some("anthropic/claude-opus-5");
     }
+    // Old Fable 5 (non-.1) → Fable 5.1 (v2.1.257 default Fable)
+    if lower.ends_with("claude-fable-5") || lower == "fable-5" || lower == "fable5" {
+        return Some("anthropic/claude-fable-5-1");
+    }
     None
 }
 
@@ -2027,10 +2045,13 @@ pub fn normalize_model_name(model: &str) -> String {
         .or_else(|| trimmed.strip_suffix("[1M]"))
         .map(str::trim)
         .unwrap_or(trimmed);
-    // Canonicalize Fable 5 family name variants
+    // Canonicalize Fable 5 family name variants (v2.1.257: 5.1 is the default)
     let lower = stripped.to_lowercase();
     if lower == "fable" || lower == "fable-5" || lower == "fable5" || lower == "claude-fable-5" {
-        return "anthropic/claude-fable-5".to_string();
+        return "anthropic/claude-fable-5-1".to_string();
+    }
+    if lower == "fable5-1" || lower == "fable-5-1" || lower == "claude-fable-5-1" {
+        return "anthropic/claude-fable-5-1".to_string();
     }
     stripped.to_string()
 }
@@ -2039,7 +2060,7 @@ pub fn normalize_model_name(model: &str) -> String {
 #[must_use]
 pub fn is_fable_5(model: &str) -> bool {
     let normalized = normalize_model_name(model);
-    normalized == "anthropic/claude-fable-5"
+    normalized == "anthropic/claude-fable-5-1"
         || normalized.to_lowercase().contains("fable-5")
         || normalized.to_lowercase().contains("fable5")
 }
@@ -17439,7 +17460,7 @@ mod alias_resolution_tests {
         // [1m] stripped; fable variant canonicalized to full id
         assert_eq!(
             normalize_model_name("claude-fable-5[1m]"),
-            "anthropic/claude-fable-5"
+            "anthropic/claude-fable-5-1"
         );
         // Non-fable models: [1m] stripped, id otherwise unchanged
         assert_eq!(
@@ -17450,14 +17471,17 @@ mod alias_resolution_tests {
 
     #[test]
     fn normalize_canonicalizes_fable_variants() {
-        assert_eq!(normalize_model_name("fable-5"), "anthropic/claude-fable-5");
-        assert_eq!(normalize_model_name("FABLE5"), "anthropic/claude-fable-5");
-        assert_eq!(normalize_model_name("fable"), "anthropic/claude-fable-5");
+        assert_eq!(
+            normalize_model_name("fable-5"),
+            "anthropic/claude-fable-5-1"
+        );
+        assert_eq!(normalize_model_name("FABLE5"), "anthropic/claude-fable-5-1");
+        assert_eq!(normalize_model_name("fable"), "anthropic/claude-fable-5-1");
     }
 
     #[test]
     fn is_fable_5_detects_family() {
-        assert!(is_fable_5("anthropic/claude-fable-5"));
+        assert!(is_fable_5("anthropic/claude-fable-5-1"));
         assert!(is_fable_5("fable-5[1m]"));
         assert!(!is_fable_5("anthropic/claude-opus-4-6"));
     }
@@ -17466,12 +17490,12 @@ mod alias_resolution_tests {
     fn fable_alias_resolves_through_config() {
         assert_eq!(
             resolve_model_alias_with_config("fable"),
-            "anthropic/claude-fable-5"
+            "anthropic/claude-fable-5-1"
         );
         // [1m] suffix stripped during resolution
         assert_eq!(
             resolve_model_alias_with_config("fable-5[1m]"),
-            "anthropic/claude-fable-5"
+            "anthropic/claude-fable-5-1"
         );
     }
 
@@ -17503,13 +17527,26 @@ mod alias_resolution_tests {
     }
 
     #[test]
+    fn detects_deprecated_fable_5() {
+        // v2.1.257: old Fable 5 ids upgrade to Fable 5.1
+        assert_eq!(
+            deprecated_model_replacement("anthropic/claude-fable-5"),
+            Some("anthropic/claude-fable-5-1")
+        );
+        assert_eq!(
+            deprecated_model_replacement("fable-5"),
+            Some("anthropic/claude-fable-5-1")
+        );
+    }
+
+    #[test]
     fn current_models_not_deprecated() {
         assert_eq!(
             deprecated_model_replacement("anthropic/claude-sonnet-5"),
             None
         );
         assert_eq!(
-            deprecated_model_replacement("anthropic/claude-fable-5"),
+            deprecated_model_replacement("anthropic/claude-fable-5-1"),
             None
         );
         // v2.1.219: opus-5 is the current default Opus, not deprecated

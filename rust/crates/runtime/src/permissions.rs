@@ -314,6 +314,18 @@ impl PermissionPolicy {
         reason: Option<String>,
         mut prompter: Option<&mut dyn PermissionPrompter>,
     ) -> PermissionOutcome {
+        // v2.1.259: `--permission-prompts none` (CLAWC_PERMISSION_PROMPTS=none)
+        // for unattended hosts — anything that would prompt is denied outright
+        // without consulting a prompter.
+        if permission_prompts_disabled() {
+            return PermissionOutcome::Deny {
+                reason: reason.unwrap_or_else(|| {
+                    format!(
+                        "tool '{tool_name}' requires approval, but permission prompts are disabled (--permission-prompts none)"
+                    )
+                }),
+            };
+        }
         let request = PermissionRequest {
             tool_name: tool_name.to_string(),
             input: input.to_string(),
@@ -481,10 +493,12 @@ fn extract_tool_param(input: &str, key: &str) -> Option<String> {
     }
 }
 
-/// v2.1.211: neutralize a tool-input string for display in permission previews.
-/// Strips Unicode bidi-control / zero-width / format characters and replaces
-/// look-alike quotation marks with ASCII equivalents, so a malicious tool input
-/// cannot visually alter the approval message (e.g. hide a `rm -rf` behind a
+/// v2.1.259: true when `--permission-prompts none` is active
+/// (CLAWC_PERMISSION_PROMPTS=none): anything that would prompt is denied.
+fn permission_prompts_disabled() -> bool {
+    std::env::var("CLAWC_PERMISSION_PROMPTS").as_deref() == Ok("none")
+}
+
 /// v2.1.246: return a warning for a Bash allow rule that places a wildcard
 /// BEFORE the subcommand (e.g. `Bash(git * main)`). Such rules also match
 /// options inserted before the subcommand, making them far broader than the

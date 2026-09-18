@@ -318,6 +318,34 @@ const TOP_LEVEL_FIELDS: &[FieldSpec] = &[
         name: "modelPricing",
         expected: FieldType::Object,
     },
+    // v2.1.261: inline output ceilings before spilling to a file (chars).
+    FieldSpec {
+        name: "bashOutputMaxChars",
+        expected: FieldType::Number,
+    },
+    FieldSpec {
+        name: "taskOutputMaxChars",
+        expected: FieldType::Number,
+    },
+    // v2.1.257: 12h/24h/UTC/strftime clock and display timezone.
+    FieldSpec {
+        name: "timeFormat",
+        expected: FieldType::String,
+    },
+    FieldSpec {
+        name: "timeZone",
+        expected: FieldType::String,
+    },
+    // v2.1.267: cap the effort level users can select.
+    FieldSpec {
+        name: "maxEffortLevel",
+        expected: FieldType::String,
+    },
+    // v2.1.257: refuse reads outside the working directories.
+    FieldSpec {
+        name: "blockReadsOutsideWorkingDirectories",
+        expected: FieldType::Bool,
+    },
 ];
 
 const WORKFLOW_FIELDS: &[FieldSpec] = &[FieldSpec {

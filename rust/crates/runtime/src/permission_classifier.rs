@@ -832,24 +832,31 @@ mod tests {
     // --- v2.1.259: --permission-prompts none ---
 
     #[test]
-    fn permission_prompts_none_denies_prompted_tools() {
+    fn permission_prompts_none_affects_classification() {
+        // Sequential under the shared env lock: these tests mutate
+        // CLAWC_PERMISSION_PROMPTS, which every other classify() test reads.
+        let _guard = crate::test_env_lock();
         std::env::set_var("CLAWC_PERMISSION_PROMPTS", "none");
         // cargo build would normally Prompt; with prompts off it must Deny.
         assert_eq!(
             classifier().classify("bash", r#"{"command":"cargo build"}"#),
             Classification::Deny
         );
-        std::env::remove_var("CLAWC_PERMISSION_PROMPTS");
-    }
-
-    #[test]
-    fn permission_prompts_none_keeps_allow_flow() {
-        std::env::set_var("CLAWC_PERMISSION_PROMPTS", "none");
         // Tools that auto-Allow are unaffected.
         assert_eq!(
             classifier().classify("bash", r#"{"command":"cat README.md"}"#),
             Classification::Allow
         );
+        // Ordinary URLs pass through to the (now denied) Prompt path.
+        assert_eq!(
+            classifier().classify("WebFetch", r#"{"url":"https://docs.example.com/guide"}"#),
+            Classification::Deny
+        );
         std::env::remove_var("CLAWC_PERMISSION_PROMPTS");
+        // With the flag cleared, the normal Prompt flow is restored.
+        assert_eq!(
+            classifier().classify("bash", r#"{"command":"cargo build"}"#),
+            Classification::Prompt
+        );
     }
 }

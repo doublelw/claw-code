@@ -93,6 +93,8 @@ enum FieldType {
     Object,
     StringArray,
     Number,
+    /// v2.1.281: an object or a literal `false` (e.g. `"attribution": false`).
+    ObjectOrFalse,
 }
 
 impl FieldType {
@@ -103,6 +105,7 @@ impl FieldType {
             Self::Object => "an object",
             Self::StringArray => "an array of strings",
             Self::Number => "a number",
+            Self::ObjectOrFalse => "an object or false",
         }
     }
 
@@ -115,6 +118,7 @@ impl FieldType {
                 .as_array()
                 .is_some_and(|arr| arr.iter().all(|v| v.as_str().is_some())),
             Self::Number => value.as_i64().is_some(),
+            Self::ObjectOrFalse => value.as_object().is_some() || value == &JsonValue::Bool(false),
         }
     }
 }
@@ -237,6 +241,15 @@ const TOP_LEVEL_FIELDS: &[FieldSpec] = &[
         name: "availableModels",
         expected: FieldType::StringArray,
     },
+    // v2.1.283: managed model gates.
+    FieldSpec {
+        name: "availableModelsMatch",
+        expected: FieldType::String,
+    },
+    FieldSpec {
+        name: "deniedModels",
+        expected: FieldType::StringArray,
+    },
     FieldSpec {
         name: "language",
         expected: FieldType::String,
@@ -251,7 +264,9 @@ const TOP_LEVEL_FIELDS: &[FieldSpec] = &[
     },
     FieldSpec {
         name: "attribution",
-        expected: FieldType::Object,
+        // v2.1.281: `"attribution": false` hides all attribution; the object
+        // form stays supported for files shared across versions.
+        expected: FieldType::ObjectOrFalse,
     },
     FieldSpec {
         name: "autoMode",
@@ -344,6 +359,27 @@ const TOP_LEVEL_FIELDS: &[FieldSpec] = &[
     // v2.1.257: refuse reads outside the working directories.
     FieldSpec {
         name: "blockReadsOutsideWorkingDirectories",
+        expected: FieldType::Bool,
+    },
+    // v2.1.282: cap Claude's prose width in wide terminals (tables and code
+    // blocks keep the full width).
+    FieldSpec {
+        name: "maxProseWidth",
+        expected: FieldType::Number,
+    },
+    // v2.1.282: let `claude --chrome` run alongside an exclusive
+    // managed-mcp.json.
+    FieldSpec {
+        name: "allowClaudeInChromeWithManagedMcp",
+        expected: FieldType::Bool,
+    },
+    // v2.1.275: sync claude.ai-enabled skills/plugins to terminal sessions.
+    FieldSpec {
+        name: "syncClaudeAiSkills",
+        expected: FieldType::Bool,
+    },
+    FieldSpec {
+        name: "syncClaudeAiPlugins",
         expected: FieldType::Bool,
     },
 ];

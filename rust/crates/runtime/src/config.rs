@@ -89,6 +89,16 @@ pub struct RuntimeFeatureConfig {
     disallowed_tools: Vec<String>,
     enforce_available_models: bool,
     available_models: Vec<String>,
+    /// v2.1.283: `availableModelsMatch: "exact"` — an `availableModels` entry
+    /// allows only the exact model version it names, so new releases stay
+    /// blocked until they are listed.
+    available_models_match: Option<String>,
+    /// v2.1.283: `deniedModels` — block specific models, even when
+    /// `availableModels` allows them.
+    denied_models: Vec<String>,
+    /// v2.1.281: `"attribution": false` hides all commit and PR attribution.
+    /// Defaults to true (attribution shown).
+    attribution: bool,
     language: Option<String>,
     disable_bundled_skills: bool,
     /// v2.1.186: `!` bash commands trigger Claude to respond to the output.
@@ -408,6 +418,18 @@ impl ConfigLoader {
                 .unwrap_or(false),
             available_models: parse_optional_string_vec(&merged_value, "availableModels")
                 .unwrap_or_default(),
+            available_models_match: parse_optional_string_field(
+                &merged_value,
+                "availableModelsMatch",
+            ),
+            denied_models: parse_optional_string_vec(&merged_value, "deniedModels")
+                .unwrap_or_default(),
+            attribution: !matches!(
+                merged_value
+                    .as_object()
+                    .and_then(|entries| entries.get("attribution")),
+                Some(JsonValue::Bool(false))
+            ),
             language: parse_optional_string_field(&merged_value, "language"),
             disable_bundled_skills: parse_optional_bool(&merged_value, "disableBundledSkills")
                 .unwrap_or(false)
@@ -516,6 +538,18 @@ impl ConfigLoader {
                 .unwrap_or(false),
             available_models: parse_optional_string_vec(&merged_value, "availableModels")
                 .unwrap_or_default(),
+            available_models_match: parse_optional_string_field(
+                &merged_value,
+                "availableModelsMatch",
+            ),
+            denied_models: parse_optional_string_vec(&merged_value, "deniedModels")
+                .unwrap_or_default(),
+            attribution: !matches!(
+                merged_value
+                    .as_object()
+                    .and_then(|entries| entries.get("attribution")),
+                Some(JsonValue::Bool(false))
+            ),
             language: parse_optional_string_field(&merged_value, "language"),
             disable_bundled_skills: parse_optional_bool(&merged_value, "disableBundledSkills")
                 .unwrap_or(false)
@@ -687,6 +721,33 @@ impl RuntimeConfig {
     #[must_use]
     pub fn available_models(&self) -> &[String] {
         self.feature_config.available_models()
+    }
+
+    /// v2.1.283
+    #[must_use]
+    pub fn available_models_match(&self) -> Option<&str> {
+        self.feature_config.available_models_match()
+    }
+
+    /// v2.1.283
+    #[must_use]
+    pub fn denied_models(&self) -> &[String] {
+        self.feature_config.denied_models()
+    }
+
+    /// v2.1.283: managed-model gate combining `deniedModels` (always blocks,
+    /// even when `availableModels` allows) with `availableModels` +
+    /// `availableModelsMatch`. With `"exact"`, an entry allows only the exact
+    /// version it names; the default family match accepts ids that extend an
+    /// entry. Unenforced configs allow every model.
+    pub fn check_model_allowed(&self, model: &str) -> Result<(), String> {
+        self.feature_config.check_model_allowed(model)
+    }
+
+    /// v2.1.281: false when `"attribution": false` hides commit/PR attribution.
+    #[must_use]
+    pub fn attribution(&self) -> bool {
+        self.feature_config.attribution()
     }
 
     /// v2.1.176
@@ -874,6 +935,63 @@ impl RuntimeFeatureConfig {
     #[must_use]
     pub fn available_models(&self) -> &[String] {
         &self.available_models
+    }
+
+    /// v2.1.283: match mode for `availableModels` entries ("exact" or unset).
+    #[must_use]
+    pub fn available_models_match(&self) -> Option<&str> {
+        self.available_models_match.as_deref()
+    }
+
+    /// v2.1.283: models blocked even when `availableModels` allows them.
+    #[must_use]
+    pub fn denied_models(&self) -> &[String] {
+        &self.denied_models
+    }
+
+    /// v2.1.283: managed-model gate combining `deniedModels` (always blocks,
+    /// even when `availableModels` allows) with `availableModels` +
+    /// `availableModelsMatch`. With `"exact"`, an entry allows only the exact
+    /// version it names, so new releases stay blocked until listed; the
+    /// default family match accepts ids that extend an entry. Unenforced
+    /// configs allow every model.
+    pub fn check_model_allowed(&self, model: &str) -> Result<(), String> {
+        if self
+            .denied_models
+            .iter()
+            .any(|denied| denied.eq_ignore_ascii_case(model))
+        {
+            return Err(format!(
+                "model `{model}` is blocked by the `deniedModels` managed setting"
+            ));
+        }
+        if !self.enforce_available_models || self.available_models.is_empty() {
+            return Ok(());
+        }
+        if self.available_models_match.as_deref() == Some("exact") {
+            if self.available_models.iter().any(|entry| entry == model) {
+                return Ok(());
+            }
+            return Err(format!(
+                "model `{model}` is not listed in `availableModels` (availableModelsMatch=exact)"
+            ));
+        }
+        if self
+            .available_models
+            .iter()
+            .any(|entry| model == entry || model.starts_with(entry.as_str()))
+        {
+            return Ok(());
+        }
+        Err(format!(
+            "model `{model}` is not listed in `availableModels`"
+        ))
+    }
+
+    /// v2.1.281: false when `"attribution": false` hides commit/PR attribution.
+    #[must_use]
+    pub fn attribution(&self) -> bool {
+        self.attribution
     }
 
     /// v2.1.176: language for session titles / UI localization.
@@ -3118,6 +3236,126 @@ mod tests {
         );
         assert_eq!(loaded.language(), Some("zh"));
         assert!(loaded.disable_bundled_skills());
+
+        fs::remove_dir_all(root).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn parses_v2283_model_gate_settings() {
+        // v2.1.283: availableModelsMatch + deniedModels managed settings.
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let home = root.join("home").join(".clawc");
+        fs::create_dir_all(&home).expect("home config dir");
+        fs::create_dir_all(&cwd).expect("project dir");
+        fs::write(
+            home.join("settings.json"),
+            r#"{
+                "enforceAvailableModels": true,
+                "availableModels": ["anthropic/claude-opus-5-5"],
+                "availableModelsMatch": "exact",
+                "deniedModels": ["anthropic/claude-fable-5-1"]
+            }"#,
+        )
+        .expect("write settings");
+
+        let loaded = ConfigLoader::new(&cwd, &home)
+            .load()
+            .expect("config should load");
+
+        assert_eq!(loaded.available_models_match(), Some("exact"));
+        assert_eq!(loaded.denied_models(), ["anthropic/claude-fable-5-1"]);
+        // Exact: the listed version passes, variants and unlisted ids fail.
+        assert!(loaded
+            .check_model_allowed("anthropic/claude-opus-5-5")
+            .is_ok());
+        assert!(loaded
+            .check_model_allowed("anthropic/claude-opus-5-5[1m]")
+            .is_err());
+        // Denied wins even when availableModels would allow it.
+        assert!(loaded
+            .check_model_allowed("anthropic/claude-fable-5-1")
+            .is_err());
+        assert!(loaded
+            .check_model_allowed("anthropic/claude-sonnet-5")
+            .is_err());
+
+        fs::remove_dir_all(root).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn model_gate_family_match_and_denied_wins() {
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let home = root.join("home").join(".clawc");
+        fs::create_dir_all(&home).expect("home config dir");
+        fs::create_dir_all(&cwd).expect("project dir");
+        fs::write(
+            home.join("settings.json"),
+            r#"{
+                "enforceAvailableModels": true,
+                "availableModels": ["anthropic/claude-opus-5"],
+                "deniedModels": ["ANTHROPIC/CLAUDE-OPUS-5-5"]
+            }"#,
+        )
+        .expect("write settings");
+
+        let loaded = ConfigLoader::new(&cwd, &home)
+            .load()
+            .expect("config should load");
+
+        // Default family match: ids extending an entry are allowed.
+        assert!(loaded
+            .check_model_allowed("anthropic/claude-opus-5")
+            .is_ok());
+        assert!(loaded
+            .check_model_allowed("anthropic/claude-opus-5-9")
+            .is_ok());
+        // deniedModels is case-insensitive and beats the family match.
+        assert!(loaded
+            .check_model_allowed("anthropic/claude-opus-5-5")
+            .is_err());
+        // An unrelated model fails.
+        assert!(loaded
+            .check_model_allowed("anthropic/claude-sonnet-5")
+            .is_err());
+
+        fs::remove_dir_all(root).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn attribution_false_hides_attribution() {
+        // v2.1.281: `"attribution": false` hides all commit/PR attribution;
+        // the object form and absence keep attribution enabled.
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let home = root.join("home").join(".clawc");
+        fs::create_dir_all(&home).expect("home config dir");
+        fs::create_dir_all(&cwd).expect("project dir");
+        fs::write(home.join("settings.json"), r#"{"attribution": false}"#).expect("write settings");
+
+        let loaded = ConfigLoader::new(&cwd, &home)
+            .load()
+            .expect("config should load");
+        assert!(!loaded.attribution());
+        assert!(!loaded.feature_config().attribution());
+
+        fs::write(
+            home.join("settings.json"),
+            r#"{"attribution": {"sessionUrl": false}}"#,
+        )
+        .expect("write settings object form");
+        let loaded = ConfigLoader::new(&cwd, &home)
+            .load()
+            .expect("config should load");
+        assert!(loaded.attribution());
+        assert!(!loaded.attribution_session_url());
+
+        fs::write(home.join("settings.json"), "{}").expect("write empty settings");
+        let loaded = ConfigLoader::new(&cwd, &home)
+            .load()
+            .expect("config should load");
+        assert!(loaded.attribution());
 
         fs::remove_dir_all(root).expect("cleanup temp dir");
     }

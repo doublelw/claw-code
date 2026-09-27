@@ -1995,8 +1995,12 @@ fn levenshtein_distance(left: &str, right: &str) -> usize {
 
 fn resolve_model_alias(model: &str) -> &str {
     match model {
-        // v2.1.219: Opus 5 is now the default Opus model (1M context, fast mode).
-        "opus" => "anthropic/claude-opus-5",
+        // v2.1.280: Opus 5.5 is now the default Opus model
+        // (1M context, $4/$20 per Mtok, $0.20/Mtok cache reads).
+        "opus" => "anthropic/claude-opus-5-5",
+        "opus5-5" | "opus-5-5" => "anthropic/claude-opus-5-5",
+        // v2.1.219: Opus 5 remains a valid (non-default) Opus id.
+        "opus5" | "opus-5" => "anthropic/claude-opus-5",
         // v2.1.197: Sonnet 5 is now the default Sonnet with native 1M context.
         "sonnet" => "anthropic/claude-sonnet-5",
         "haiku" => "anthropic/claude-haiku-4-5-20251213",
@@ -4922,6 +4926,14 @@ fn run_resume_command(
                 json: Some(report.json_value()),
             })
         }
+        SlashCommand::PromptAudit => {
+            let findings = prompt_audit_findings();
+            Ok(ResumeCommandOutcome {
+                session: session.clone(),
+                message: Some(render_prompt_audit_report(&findings)),
+                json: Some(prompt_audit_report_json(&findings)),
+            })
+        }
         SlashCommand::Stats => {
             let usage = UsageTracker::from_session(session).cumulative_usage();
             Ok(ResumeCommandOutcome {
@@ -5574,15 +5586,117 @@ fn build_runtime_mcp_state(
     Ok((Some(Arc::new(Mutex::new(mcp_state))), runtime_tools))
 }
 
+/// v2.1.280: cap on MCP tool descriptions and server instructions (2,048
+/// characters by default) so a verbose server cannot flood the session
+/// context. `CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH` overrides the cap for
+/// every MCP server in the session; non-positive or unparsable values fall
+/// back to the default.
+fn max_mcp_description_length() -> usize {
+    std::env::var("CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH")
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .filter(|limit| *limit > 0)
+        .unwrap_or(2_048)
+}
+
+fn clamp_mcp_description(raw: String) -> String {
+    let cap = max_mcp_description_length();
+    if raw.chars().count() <= cap {
+        return raw;
+    }
+    let mut truncated: String = raw.chars().take(cap.saturating_sub(1)).collect();
+    truncated.push('…');
+    truncated
+}
+
+/// v2.1.283: `/doctor prompt-audit` report — legacy prompting patterns found
+/// in CLAUDE.md/CLAWC.md files, skills, agents and commands.
+fn prompt_audit_findings() -> Vec<runtime::PromptAuditFinding> {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    runtime::audit_prompt_files(&cwd)
+}
+
+fn render_prompt_audit_report(findings: &[runtime::PromptAuditFinding]) -> String {
+    if findings.is_empty() {
+        return "prompt-audit: no legacy prompting patterns found in CLAUDE.md/CLAWC.md files, skills, agents or commands.".to_string();
+    }
+    let mut out = format!(
+        "prompt-audit: {} legacy prompting pattern(s) written for older models:\n",
+        findings.len()
+    );
+    for finding in findings {
+        out.push_str(&format!(
+            "  {}:{} — {} ({}): {}\n",
+            finding.path.display(),
+            finding.line,
+            finding.pattern,
+            finding.note,
+            finding.snippet
+        ));
+    }
+    out.push_str("Consider rewriting these for current models.");
+    out
+}
+
+fn prompt_audit_report_json(findings: &[runtime::PromptAuditFinding]) -> Value {
+    Value::Array(
+        findings
+            .iter()
+            .map(|finding| {
+                json!({
+                    "path": finding.path.display().to_string(),
+                    "line": finding.line,
+                    "pattern": finding.pattern,
+                    "note": finding.note,
+                    "snippet": finding.snippet,
+                })
+            })
+            .collect(),
+    )
+}
+
+#[cfg(test)]
+mod mcp_description_tests {
+    use super::{clamp_mcp_description, max_mcp_description_length};
+
+    #[test]
+    fn mcp_description_cap_env_and_default() {
+        // v2.1.280: descriptions above the cap are truncated with an ellipsis;
+        // CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH overrides the 2,048 default,
+        // and invalid values fall back safely.
+        let short = "short description".to_string();
+        assert_eq!(clamp_mcp_description(short.clone()), short);
+
+        let long = "x".repeat(3_000);
+        let clamped = clamp_mcp_description(long);
+        assert_eq!(clamped.chars().count(), 2_048);
+        assert!(clamped.ends_with('…'));
+
+        // Override the cap for the rest of this test only.
+        std::env::set_var("CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH", "100");
+        assert_eq!(max_mcp_description_length(), 100);
+        let clamped_small = clamp_mcp_description("y".repeat(250));
+        assert_eq!(clamped_small.chars().count(), 100);
+        assert!(clamped_small.ends_with('…'));
+
+        std::env::set_var("CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH", "0");
+        assert_eq!(max_mcp_description_length(), 2_048);
+        std::env::set_var("CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH", "abc");
+        assert_eq!(max_mcp_description_length(), 2_048);
+        std::env::remove_var("CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH");
+        assert_eq!(max_mcp_description_length(), 2_048);
+    }
+}
+
 fn mcp_runtime_tool_definition(tool: &runtime::ManagedMcpTool) -> RuntimeToolDefinition {
     RuntimeToolDefinition {
         name: tool.qualified_name.clone(),
-        description: Some(
+        description: Some(clamp_mcp_description(
             tool.tool
                 .description
                 .clone()
                 .unwrap_or_else(|| format!("Invoke MCP tool `{}`.", tool.qualified_name)),
-        ),
+        )),
         input_schema: tool
             .tool
             .input_schema
@@ -6301,6 +6415,11 @@ impl LiveCli {
                     "{}",
                     render_doctor_report(ConfigWarningMode::EmitStderr)?.render()
                 );
+                false
+            }
+            SlashCommand::PromptAudit => {
+                let findings = prompt_audit_findings();
+                println!("{}", render_prompt_audit_report(&findings));
                 false
             }
             SlashCommand::History { count } => {
@@ -12869,7 +12988,7 @@ mod tests {
             parse_args(&args).expect("args should parse"),
             CliAction::Prompt {
                 prompt: "explain this".to_string(),
-                model: "anthropic/claude-opus-5".to_string(),
+                model: "anthropic/claude-opus-5-5".to_string(),
                 output_format: CliOutputFormat::Json,
                 allowed_tools: None,
                 permission_mode: PermissionMode::DangerFullAccess,
@@ -12943,7 +13062,7 @@ mod tests {
             parse_args(&args).expect("args should parse"),
             CliAction::Prompt {
                 prompt: "explain this".to_string(),
-                model: "anthropic/claude-opus-5".to_string(),
+                model: "anthropic/claude-opus-5-5".to_string(),
                 output_format: CliOutputFormat::Text,
                 allowed_tools: None,
                 permission_mode: PermissionMode::DangerFullAccess,
@@ -12957,8 +13076,11 @@ mod tests {
 
     #[test]
     fn resolves_known_model_aliases() {
-        // v2.1.219: opus alias now resolves to Opus 5
-        assert_eq!(resolve_model_alias("opus"), "anthropic/claude-opus-5");
+        // v2.1.280: opus alias now resolves to Opus 5.5
+        assert_eq!(resolve_model_alias("opus"), "anthropic/claude-opus-5-5");
+        assert_eq!(resolve_model_alias("opus-5-5"), "anthropic/claude-opus-5-5");
+        // v2.1.219: explicit opus-5 stays a valid (non-default) Opus id
+        assert_eq!(resolve_model_alias("opus-5"), "anthropic/claude-opus-5");
         // v2.1.197: sonnet alias now resolves to Sonnet 5
         assert_eq!(resolve_model_alias("sonnet"), "anthropic/claude-sonnet-5");
         assert_eq!(
@@ -13001,7 +13123,7 @@ mod tests {
 
         // then
         assert_eq!(direct, "anthropic/claude-haiku-4-5-20251213");
-        assert_eq!(chained, "anthropic/claude-opus-5");
+        assert_eq!(chained, "anthropic/claude-opus-5-5");
         assert_eq!(cross_provider, "grok-3-mini");
         assert_eq!(unknown, "unknown-model");
         assert_eq!(builtin, "anthropic/claude-haiku-4-5-20251213");
@@ -14607,7 +14729,7 @@ mod tests {
             .expect("prompt shorthand should still work"),
             CliAction::Prompt {
                 prompt: "please debug this".to_string(),
-                model: "anthropic/claude-opus-5".to_string(),
+                model: "anthropic/claude-opus-5-5".to_string(),
                 output_format: CliOutputFormat::Text,
                 allowed_tools: None,
                 permission_mode: crate::default_permission_mode(),
@@ -17402,8 +17524,8 @@ mod dump_manifests_tests {
 mod alias_resolution_tests {
     use super::{
         deprecated_model_replacement, is_fable_5, looks_non_human, normalize_model_name,
-        permission_mode_display, resolve_model_alias_with_config, unique_session_name,
-        validate_model_syntax,
+        permission_mode_display, resolve_model_alias, resolve_model_alias_with_config,
+        unique_session_name, validate_model_syntax,
     };
 
     #[test]
@@ -17411,7 +17533,7 @@ mod alias_resolution_tests {
         // Built-in aliases should resolve to their full IDs
         assert_eq!(
             resolve_model_alias_with_config("opus"),
-            "anthropic/claude-opus-5"
+            "anthropic/claude-opus-5-5"
         );
         assert_eq!(
             resolve_model_alias_with_config("sonnet"),
@@ -17549,9 +17671,27 @@ mod alias_resolution_tests {
             deprecated_model_replacement("anthropic/claude-fable-5-1"),
             None
         );
-        // v2.1.219: opus-5 is the current default Opus, not deprecated
+        // v2.1.280: opus-5 is no longer the default Opus (5.5 is) but the
+        // id itself is still current, not deprecated
         assert_eq!(
             deprecated_model_replacement("anthropic/claude-opus-5"),
+            None
+        );
+    }
+
+    #[test]
+    fn opus_5_5_is_default_opus() {
+        // v2.1.280: Claude Opus 5.5 (claude-opus-5-5) is now the default
+        // Opus model — 1M context, $4/$20 per Mtok, $0.20/Mtok cache reads.
+        assert_eq!(resolve_model_alias("opus"), "anthropic/claude-opus-5-5");
+        assert_eq!(resolve_model_alias("opus5-5"), "anthropic/claude-opus-5-5");
+        // Neither Opus 5 nor Opus 5.5 is a deprecated id.
+        assert_eq!(
+            deprecated_model_replacement("anthropic/claude-opus-5"),
+            None
+        );
+        assert_eq!(
+            deprecated_model_replacement("anthropic/claude-opus-5-5"),
             None
         );
     }

@@ -378,6 +378,11 @@ enum PermissionRuleMatcher {
         value: String,
         wildcard: bool,
     },
+    /// v2.1.282: a mid-pattern `:*` (e.g. `Bash(git commit:* --amend)`).
+    /// Segments split on `:*` must appear in order, anchored at both ends.
+    /// Such rules were previously skipped in settings files while
+    /// `--allowedTools` honored them; they now work from everywhere.
+    GlobSegments(Vec<String>),
 }
 
 impl PermissionRule {
@@ -436,18 +441,58 @@ impl PermissionRule {
                     }
                 }),
             },
+            PermissionRuleMatcher::GlobSegments(segments) => extract_permission_subject(input)
+                .is_some_and(|candidate| glob_segments_match(segments, &candidate)),
         }
     }
+}
+
+/// v2.1.282: match a mid-pattern `:*` rule. Segments (split on `:*`) must
+/// appear in order; the candidate must start with the first segment and end
+/// with the last segment.
+fn glob_segments_match(segments: &[String], candidate: &str) -> bool {
+    let Some((first, rest)) = segments.split_first() else {
+        return false;
+    };
+    let mut remainder = match candidate.strip_prefix(first.as_str()) {
+        Some(tail) => tail,
+        None => return false,
+    };
+    let mut index = 0usize;
+    while index < rest.len() {
+        let segment = rest[index].as_str();
+        if index + 1 == rest.len() {
+            // Final segment: anchored at the end.
+            return remainder.ends_with(segment);
+        }
+        match remainder.find(segment) {
+            Some(position) => {
+                remainder = &remainder[position + segment.len()..];
+                index += 1;
+            }
+            None => return false,
+        }
+    }
+    true
 }
 
 fn parse_rule_matcher(content: &str) -> PermissionRuleMatcher {
     let unescaped = unescape_rule_content(content.trim());
     if unescaped.is_empty() || unescaped == "*" {
         PermissionRuleMatcher::Any
-    } else if let Some(prefix) = unescaped.strip_suffix(":*") {
-        // Distinguish a `param:*` (v2.1.178 param wildcard) from a `path:*`
-        // glob prefix: a param key is a bare identifier (alnum/underscore,
-        // no path separators or spaces). Otherwise treat as a path Prefix.
+    } else if let Some(first_star) = unescaped.find(":*") {
+        if first_star + 2 != unescaped.len() {
+            // v2.1.282: a `:*` that is not the final token is honored as an
+            // in-order glob instead of being treated as a dead Exact rule.
+            return PermissionRuleMatcher::GlobSegments(
+                unescaped.split(":*").map(str::to_string).collect(),
+            );
+        }
+        // A trailing `:*`: distinguish a `param:*` (v2.1.178 param wildcard)
+        // from a `path:*` glob prefix: a param key is a bare identifier
+        // (alnum/underscore, no path separators or spaces). Otherwise treat
+        // as a path Prefix.
+        let prefix = &unescaped[..first_star];
         if is_param_key(prefix) {
             PermissionRuleMatcher::Param {
                 key: prefix.to_string(),
@@ -518,14 +563,19 @@ pub fn bash_rule_wildcard_warning(rule: &str) -> Option<String> {
         return None;
     }
     let content = &trimmed[open + 1..close];
+    // v2.1.282: a `:*` wildcard is honored in any position, so only a bare
+    // `*` (not part of a `:*` token) triggers the inserted-options warning.
     // A wildcard in anything other than the final position of the pattern
     // (i.e. a `*` followed by more non-wildcard content after a space)
     // widens the rule to match inserted options.
-    if let Some(star) = content.find('*') {
+    if let Some((star, _)) = content
+        .match_indices('*')
+        .find(|(idx, _)| *idx == 0 || content.as_bytes()[idx - 1] != b':')
+    {
         let after = &content[star + 1..];
-        // `:*` suffix (a trailing prefix-glob) is fine; a bare `*` or a `*`
-        // followed by more pattern text is the risky form.
-        if after.is_empty() || after == ":" || after == ":*" {
+        // A trailing bare `*` or a `*` directly before `:` is the benign
+        // form; anything else after the wildcard widens the rule.
+        if after.is_empty() || after == ":" {
             return None;
         }
         return Some(format!(
@@ -715,7 +765,7 @@ mod tests {
     use super::{
         bash_rule_wildcard_warning, neutralize_tool_input_preview, redact_secrets,
         PermissionContext, PermissionMode, PermissionOutcome, PermissionOverride, PermissionPolicy,
-        PermissionPromptDecision, PermissionPrompter, PermissionRequest,
+        PermissionPromptDecision, PermissionPrompter, PermissionRequest, PermissionRule,
     };
     use crate::config::RuntimePermissionRuleConfig;
 
@@ -1023,6 +1073,39 @@ mod tests {
     #[test]
     fn non_bash_rules_no_warning() {
         assert_eq!(bash_rule_wildcard_warning("Edit(src/**)"), None);
+    }
+
+    // --- v2.1.282: mid-pattern `:*` Bash rules ---
+
+    #[test]
+    fn mid_pattern_glob_rule_matches_from_settings() {
+        // `Bash(git commit:* --amend)` was previously skipped in settings
+        // files while `--allowedTools` honored it; it now matches everywhere.
+        let rule = PermissionRule::parse("Bash(git commit:* --amend)");
+        assert!(rule.matches("Bash", r#"{"command":"git commit --amend"}"#));
+        assert!(rule.matches("Bash", r#"{"command":"git commit -x --amend"}"#));
+        assert!(!rule.matches("Bash", r#"{"command":"git push"}"#));
+        assert!(!rule.matches("Bash", r#"{"command":"git commit --amend --all"}"#));
+    }
+
+    #[test]
+    fn multi_segment_glob_rule_matches_in_order() {
+        let rule = PermissionRule::parse("Bash(npm run:* --silent:*)");
+        assert!(rule.matches("Bash", r#"{"command":"npm run build --silent"}"#));
+        assert!(!rule.matches("Bash", r#"{"command":"npm test --silent"}"#));
+    }
+
+    #[test]
+    fn mid_pattern_glob_rule_no_wildcard_warning() {
+        // A mid-pattern `:*` is a first-class form now, so the
+        // inserted-options warning no longer fires for it.
+        assert_eq!(
+            bash_rule_wildcard_warning("Bash(git commit:* --amend)"),
+            None
+        );
+        // A bare `*` before later content still warns.
+        let warn = bash_rule_wildcard_warning("Bash(git * --main)");
+        assert!(warn.is_some());
     }
 
     #[test]

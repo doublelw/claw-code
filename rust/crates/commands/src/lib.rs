@@ -1143,6 +1143,10 @@ pub enum SlashCommand {
         args: Option<String>,
     },
     Doctor,
+    /// v2.1.283: `/doctor prompt-audit` (also `/checkup prompt-audit`) —
+    /// audit instructions/skills/agents/commands for legacy prompting
+    /// patterns written for older models.
+    PromptAudit,
     Login,
     Logout,
     Vim,
@@ -1282,6 +1286,7 @@ impl SlashCommand {
             Self::Compact { .. } => "/compact",
             Self::Cost => "/cost",
             Self::Doctor => "/doctor",
+            Self::PromptAudit => "/doctor prompt-audit",
             Self::Config { .. } => "/config",
             Self::Memory { .. } => "/memory",
             Self::History { .. } => "/history",
@@ -1453,9 +1458,14 @@ pub fn validate_slash_command_input(
         "skills" | "skill" => SlashCommand::Skills {
             args: parse_skills_args(remainder.as_deref())?,
         },
-        "doctor" | "providers" => {
-            validate_no_args(command, &args)?;
-            SlashCommand::Doctor
+        "doctor" | "providers" | "checkup" => {
+            // v2.1.283: `/doctor prompt-audit` (also `/checkup prompt-audit`).
+            if args == ["prompt-audit"] {
+                SlashCommand::PromptAudit
+            } else {
+                validate_no_args(command, &args)?;
+                SlashCommand::Doctor
+            }
         }
         "login" | "logout" => {
             return Err(command_error(
@@ -4696,6 +4706,7 @@ pub fn handle_slash_command(
         | SlashCommand::Agents { .. }
         | SlashCommand::Skills { .. }
         | SlashCommand::Doctor
+        | SlashCommand::PromptAudit
         | SlashCommand::Login
         | SlashCommand::Logout
         | SlashCommand::Vim
@@ -5082,6 +5093,19 @@ mod tests {
                 action: Some("fork".to_string()),
                 target: Some("incident-review".to_string())
             }))
+        );
+        // v2.1.283: /doctor prompt-audit (also /checkup prompt-audit).
+        assert_eq!(
+            SlashCommand::parse("/doctor prompt-audit"),
+            Ok(Some(SlashCommand::PromptAudit))
+        );
+        assert_eq!(
+            SlashCommand::parse("/checkup prompt-audit"),
+            Ok(Some(SlashCommand::PromptAudit))
+        );
+        assert_eq!(
+            SlashCommand::parse("/doctor"),
+            Ok(Some(SlashCommand::Doctor))
         );
     }
 

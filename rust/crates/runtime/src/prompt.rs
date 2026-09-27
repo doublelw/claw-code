@@ -237,7 +237,8 @@ fn discover_instruction_files(cwd: &Path) -> std::io::Result<Vec<ContextFile>> {
     directories.reverse();
 
     let mut files = Vec::new();
-    for dir in directories {
+    let mut found_primary = false;
+    for dir in directories.iter() {
         for candidate in [
             // ClawC scheme (primary): CLAWC.md mirrors Claude Code's CLAUDE.md.
             dir.join("CLAWC.md"),
@@ -250,22 +251,154 @@ fn discover_instruction_files(cwd: &Path) -> std::io::Result<Vec<ContextFile>> {
             dir.join("CLAUDE.local.md"),
             dir.join(".clawc").join("CLAUDE.md"),
         ] {
-            push_context_file(&mut files, candidate)?;
+            if push_context_file(&mut files, candidate)? {
+                found_primary = true;
+            }
+        }
+    }
+    // v2.1.277: in a project with no CLAUDE.md-family instructions, read
+    // AGENTS.md instead (the cross-tool agent instructions convention).
+    if !found_primary {
+        for dir in directories {
+            push_context_file(&mut files, dir.join("AGENTS.md"))?;
         }
     }
     Ok(dedupe_instruction_files(files))
 }
 
-fn push_context_file(files: &mut Vec<ContextFile>, path: PathBuf) -> std::io::Result<()> {
+fn push_context_file(files: &mut Vec<ContextFile>, path: PathBuf) -> std::io::Result<bool> {
     match fs::read_to_string(&path) {
         Ok(content) if !content.trim().is_empty() => {
             files.push(ContextFile { path, content });
-            Ok(())
+            Ok(true)
         }
-        Ok(_) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Ok(_) => Ok(false),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(error) => Err(error),
     }
+}
+
+/// v2.1.283: one legacy prompting pattern found by `/doctor prompt-audit`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PromptAuditFinding {
+    pub path: PathBuf,
+    pub line: usize,
+    /// Short label, e.g. "retired model id".
+    pub pattern: &'static str,
+    /// Why the pattern is considered written for older models.
+    pub note: &'static str,
+    /// Trimmed source line (truncated for display).
+    pub snippet: String,
+}
+
+/// v2.1.283: prompting patterns written for older models. `(needle, label,
+/// note)` — needles are matched case-insensitively per line.
+const LEGACY_PROMPT_PATTERNS: &[(&str, &str, &str)] = &[
+    (
+        "claude-3",
+        "retired model id",
+        "references Claude 3, which is retired; name the current model family or drop the id",
+    ),
+    (
+        "claude-2",
+        "retired model id",
+        "references Claude 2, which is retired; name the current model family or drop the id",
+    ),
+    (
+        "claude instant",
+        "retired model id",
+        "references Claude Instant, which is retired; name the current model family or drop the id",
+    ),
+    (
+        "claude 3",
+        "retired model mention",
+        "references Claude 3, which is retired; name the current model family or drop the mention",
+    ),
+    (
+        "claude 2",
+        "retired model mention",
+        "references Claude 2, which is retired; name the current model family or drop the mention",
+    ),
+    (
+        "constitutional ai",
+        "legacy training-era framing",
+        "constitutional-AI wording reads like a paper citation, not an instruction; state the behavior you want",
+    ),
+    (
+        "rlhf",
+        "legacy training-era framing",
+        "RLHF-era phrasing does not steer current models; describe the desired behavior directly",
+    ),
+    (
+        "as an ai language model",
+        "chatbot boilerplate",
+        "chat-era boilerplate; modern models follow plain instructions",
+    ),
+    (
+        "you are claude",
+        "identity boilerplate",
+        "identity is already set by the product system prompt; repeating it in project instructions is redundant for current models",
+    ),
+    (
+        "think step by step",
+        "chain-of-thought crutch",
+        "current models reason natively; this crutch adds noise and can hurt formatting",
+    ),
+];
+
+fn collect_markdown_files(dir: &Path, out: &mut Vec<ContextFile>, depth: u8) {
+    if depth > 4 {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_markdown_files(&path, out, depth + 1);
+        } else if path.extension().is_some_and(|ext| ext == "md") {
+            if let Ok(content) = fs::read_to_string(&path) {
+                if !content.trim().is_empty() {
+                    out.push(ContextFile { path, content });
+                }
+            }
+        }
+    }
+}
+
+/// v2.1.283: audit CLAUDE.md/CLAWC.md instruction files, skills, agents and
+/// commands for prompting patterns written for older models — the report
+/// behind `/doctor prompt-audit` (also `/checkup prompt-audit`).
+#[must_use]
+pub fn audit_prompt_files(cwd: &Path) -> Vec<PromptAuditFinding> {
+    let mut files = discover_instruction_files(cwd).unwrap_or_default();
+    for sub in ["skills", "agents", "commands"] {
+        collect_markdown_files(&cwd.join(sub), &mut files, 0);
+        collect_markdown_files(&cwd.join(".clawc").join(sub), &mut files, 0);
+        collect_markdown_files(&cwd.join(".claude").join(sub), &mut files, 0);
+        collect_markdown_files(&cwd.join(".claw").join(sub), &mut files, 0);
+    }
+
+    let mut findings = Vec::new();
+    for file in files {
+        for (index, line) in file.content.lines().enumerate() {
+            let lower = line.to_lowercase();
+            if let Some((_, label, note)) = LEGACY_PROMPT_PATTERNS
+                .iter()
+                .find(|(needle, _, _)| lower.contains(needle))
+            {
+                findings.push(PromptAuditFinding {
+                    path: file.path.clone(),
+                    line: index + 1,
+                    pattern: label,
+                    note,
+                    snippet: line.trim().chars().take(120).collect(),
+                });
+            }
+        }
+    }
+    findings
 }
 
 fn read_git_status(cwd: &Path) -> Option<String> {
@@ -567,10 +700,10 @@ fn get_actions_section() -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        collapse_blank_lines, display_context_path, normalize_instruction_content,
-        render_instruction_content, render_instruction_files, truncate_diff,
-        truncate_instruction_content, ContextFile, ModelFamilyIdentity, ProjectContext,
-        SystemPromptBuilder, MAX_GIT_DIFF_CHARS, SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
+        audit_prompt_files, collapse_blank_lines, discover_instruction_files, display_context_path,
+        normalize_instruction_content, render_instruction_content, render_instruction_files,
+        truncate_diff, truncate_instruction_content, ContextFile, ModelFamilyIdentity,
+        ProjectContext, SystemPromptBuilder, MAX_GIT_DIFF_CHARS, SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
     };
     use crate::config::ConfigLoader;
     use std::fs;
@@ -594,6 +727,102 @@ mod tests {
             std::env::set_current_dir(env!("CARGO_MANIFEST_DIR"))
                 .expect("test cwd should be recoverable");
         }
+    }
+
+    #[test]
+    fn agents_md_read_when_no_project_instructions_exist() {
+        // v2.1.277: with no CLAUDE.md-family file in the project, AGENTS.md
+        // is read instead.
+        let root = temp_dir();
+        let nested = root.join("deep").join("pkg");
+        fs::create_dir_all(&nested).expect("nested dirs");
+        fs::write(root.join("AGENTS.md"), "agent rules").expect("write AGENTS.md");
+
+        let files = discover_instruction_files(&nested).expect("discover instruction files");
+        let agents = files
+            .iter()
+            .find(|file| file.path.file_name().is_some_and(|n| n == "AGENTS.md"))
+            .expect("AGENTS.md should be discovered");
+        assert_eq!(agents.content, "agent rules");
+        // No CLAUDE.md-family file was picked up.
+        assert!(files
+            .iter()
+            .all(|file| file.path.file_name().is_none_or(|n| n == "AGENTS.md")));
+        fs::remove_dir_all(&root).expect("clean up temp root");
+    }
+
+    #[test]
+    fn agents_md_ignored_when_project_instructions_exist() {
+        // v2.1.277: AGENTS.md is a fallback only — an existing CLAUDE.md
+        // project keeps reading CLAUDE.md and never picks up AGENTS.md.
+        let root = temp_dir();
+        let nested = root.join("deep").join("pkg");
+        fs::create_dir_all(&nested).expect("nested dirs");
+        fs::write(root.join("CLAUDE.md"), "project rules").expect("write CLAUDE.md");
+        fs::write(root.join("AGENTS.md"), "agent rules").expect("write AGENTS.md");
+
+        let files = discover_instruction_files(&nested).expect("discover instruction files");
+        assert!(
+            files
+                .iter()
+                .all(|file| file.path.file_name().is_none_or(|n| n != "AGENTS.md")),
+            "AGENTS.md must not be read when CLAUDE.md exists"
+        );
+        assert!(
+            files.iter().any(|file| file.content == "project rules"),
+            "CLAUDE.md should be read"
+        );
+        fs::remove_dir_all(&root).expect("clean up temp root");
+    }
+
+    #[test]
+    fn prompt_audit_detects_legacy_patterns() {
+        // v2.1.283: /doctor prompt-audit scans instruction files, skills,
+        // agents and commands for patterns written for older models.
+        let root = temp_dir();
+        fs::create_dir_all(root.join(".clawc").join("skills").join("demo")).expect("skills dir");
+        fs::write(
+            root.join("CLAUDE.md"),
+            "Use claude-3 for everything.\nAlways think step by step before answering.\n",
+        )
+        .expect("write CLAUDE.md");
+        fs::write(
+            root.join(".clawc")
+                .join("skills")
+                .join("demo")
+                .join("SKILL.md"),
+            "you are claude, follow these rules",
+        )
+        .expect("write SKILL.md");
+        fs::write(
+            root.join(".clawc").join("skills").join("clean.md"),
+            "Modern, plain instructions with no legacy patterns.",
+        )
+        .expect("write clean skill");
+
+        let findings = audit_prompt_files(&root);
+        assert_eq!(findings.len(), 3, "findings: {findings:?}");
+        let labels: Vec<&str> = findings.iter().map(|f| f.pattern).collect();
+        assert!(labels.contains(&"retired model id"));
+        assert!(labels.contains(&"chain-of-thought crutch"));
+        assert!(labels.contains(&"identity boilerplate"));
+        // Line numbers are 1-based.
+        assert_eq!(findings[0].line, 1);
+
+        fs::remove_dir_all(&root).expect("clean up temp root");
+    }
+
+    #[test]
+    fn prompt_audit_clean_project_reports_nothing() {
+        let root = temp_dir();
+        fs::create_dir_all(&root).expect("root dir");
+        fs::write(
+            root.join("CLAUDE.md"),
+            "Build the workspace with cargo. Keep diffs small.",
+        )
+        .expect("write CLAUDE.md");
+        assert!(audit_prompt_files(&root).is_empty());
+        fs::remove_dir_all(&root).expect("clean up temp root");
     }
 
     #[test]

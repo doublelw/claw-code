@@ -2788,8 +2788,17 @@ struct ReadFileInput {
 
 #[derive(Debug, Deserialize)]
 struct WriteFileInput {
+    /// v2.1.280: models sometimes send `file_path` instead of `path`.
+    #[serde(alias = "file_path")]
     path: String,
+    /// v2.1.280: also accept `file_text` / `file_content` spellings.
+    #[serde(alias = "file_text", alias = "file_content")]
     content: String,
+    /// v2.1.280: a stray `description` field is ignored, not a validation
+    /// failure.
+    #[serde(default)]
+    #[allow(dead_code)]
+    description: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -6866,7 +6875,7 @@ mod tests {
         maybe_commit_provenance, mvp_tool_specs, permission_mode_from_plugin,
         persist_agent_terminal_state, push_output_block, run_task_packet, AgentInput, AgentJob,
         GlobalToolRegistry, LaneEventName, LaneFailureClass, ProviderRuntimeClient,
-        SubagentToolExecutor,
+        SubagentToolExecutor, WriteFileInput,
     };
     use api::OutputContentBlock;
     use runtime::ProviderFallbackConfig;
@@ -7618,6 +7627,34 @@ mod tests {
 
         // then
         assert!(error.contains("requires 'workspace-write' permission"));
+    }
+
+    #[test]
+    fn write_file_input_accepts_param_aliases() {
+        // v2.1.280: models sometimes send `file_path` / `file_text` /
+        // `file_content` or a stray `description` instead of `path`/`content`;
+        // the write tool accepts the aliases instead of failing validation.
+        let aliased: WriteFileInput = serde_json::from_value(json!({
+            "file_path": "notes/todo.md",
+            "file_text": "hello",
+            "description": "write the todo file"
+        }))
+        .expect("aliased write params should deserialize");
+        assert_eq!(aliased.path, "notes/todo.md");
+        assert_eq!(aliased.content, "hello");
+
+        let file_content_alias: WriteFileInput = serde_json::from_value(json!({
+            "file_path": "notes/x.md",
+            "file_content": "body"
+        }))
+        .expect("file_content alias should deserialize");
+        assert_eq!(file_content_alias.content, "body");
+
+        let canonical: WriteFileInput =
+            serde_json::from_value(json!({"path": "a.txt", "content": "x"}))
+                .expect("canonical write params should deserialize");
+        assert_eq!(canonical.path, "a.txt");
+        assert_eq!(canonical.content, "x");
     }
 
     #[test]

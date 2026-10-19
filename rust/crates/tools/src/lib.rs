@@ -397,10 +397,20 @@ fn permission_mode_from_plugin(value: &str) -> Result<PermissionMode, String> {
     }
 }
 
+/// v2.1.285: `CLAUDE_CODE_DISABLE_WEB_FETCH` turns the WebFetch tool off for
+/// the whole session.
+#[must_use]
+pub fn web_fetch_disabled() -> bool {
+    matches!(
+        std::env::var("CLAUDE_CODE_DISABLE_WEB_FETCH").as_deref(),
+        Ok("1") | Ok("true")
+    )
+}
+
 #[must_use]
 #[allow(clippy::too_many_lines)]
 pub fn mvp_tool_specs() -> Vec<ToolSpec> {
-    vec![
+    let mut specs = vec![
         ToolSpec {
             name: "bash",
             description: "Execute a shell command in the current workspace.",
@@ -430,7 +440,8 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
                 "properties": {
                     "path": { "type": "string" },
                     "offset": { "type": "integer", "minimum": 0 },
-                    "limit": { "type": "integer", "minimum": 1 }
+                    "limit": { "type": "integer", "minimum": 1 },
+                    "allow_large": { "type": "boolean", "description": "Read a text file past the usual size limit in one call when the context has room." }
                 },
                 "required": ["path"],
                 "additionalProperties": false
@@ -1319,7 +1330,13 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
             }),
             required_permission: PermissionMode::WorkspaceWrite,
         },
-    ]
+    ];
+    // v2.1.285: CLAUDE_CODE_DISABLE_WEB_FETCH removes WebFetch from the
+    // session's tool list entirely.
+    if web_fetch_disabled() {
+        specs.retain(|spec| spec.name != "WebFetch");
+    }
+    specs
 }
 
 /// Check permission before executing a tool. Returns Err with denial reason if blocked.
@@ -1386,7 +1403,15 @@ fn execute_tool_with_enforcer(
             maybe_enforce_permission_check_with_mode(enforcer, name, input, required_mode)?;
             run_grep_search(grep_input)
         }
-        "WebFetch" => from_value::<WebFetchInput>(input).and_then(run_web_fetch),
+        "WebFetch" => {
+            // v2.1.285: CLAUDE_CODE_DISABLE_WEB_FETCH rejects calls outright.
+            if web_fetch_disabled() {
+                return Err(
+                    "WebFetch tool is disabled by CLAUDE_CODE_DISABLE_WEB_FETCH".to_string()
+                );
+            }
+            from_value::<WebFetchInput>(input).and_then(run_web_fetch)
+        }
         "WebSearch" => from_value::<WebSearchInput>(input).and_then(run_web_search),
         "TodoWrite" => from_value::<TodoWriteInput>(input).and_then(run_todo_write),
         "Skill" => from_value::<SkillInput>(input).and_then(run_skill),
@@ -2502,8 +2527,14 @@ fn branch_divergence_output(
 fn run_read_file(input: ReadFileInput) -> Result<String, String> {
     let workspace = std::env::current_dir().map_err(|error| error.to_string())?;
     to_pretty_json(
-        read_file_in_workspace(&input.path, input.offset, input.limit, &workspace)
-            .map_err(io_to_string)?,
+        read_file_in_workspace(
+            &input.path,
+            input.offset,
+            input.limit,
+            input.allow_large.unwrap_or(false),
+            &workspace,
+        )
+        .map_err(io_to_string)?,
     )
 }
 
@@ -2784,6 +2815,10 @@ struct ReadFileInput {
     path: String,
     offset: Option<usize>,
     limit: Option<usize>,
+    /// v2.1.296: read a text file past the usual size limit in one call.
+    #[serde(default)]
+    #[allow(dead_code)]
+    allow_large: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -6873,9 +6908,9 @@ mod tests {
         classify_lane_failure, derive_agent_state, execute_agent_with_spawn, execute_tool,
         extract_recovery_outcome, final_assistant_text, global_cron_registry,
         maybe_commit_provenance, mvp_tool_specs, permission_mode_from_plugin,
-        persist_agent_terminal_state, push_output_block, run_task_packet, AgentInput, AgentJob,
-        GlobalToolRegistry, LaneEventName, LaneFailureClass, ProviderRuntimeClient,
-        SubagentToolExecutor, WriteFileInput,
+        persist_agent_terminal_state, push_output_block, run_task_packet, web_fetch_disabled,
+        AgentInput, AgentJob, GlobalToolRegistry, LaneEventName, LaneFailureClass,
+        ProviderRuntimeClient, SubagentToolExecutor, WriteFileInput,
     };
     use api::OutputContentBlock;
     use runtime::ProviderFallbackConfig;
@@ -7658,6 +7693,37 @@ mod tests {
     }
 
     #[test]
+    fn web_fetch_disable_env_removes_and_rejects_tool() {
+        // v2.1.285: CLAUDE_CODE_DISABLE_WEB_FETCH removes WebFetch from the
+        // tool list and rejects dispatch; unset restores the default.
+        let _guard = env_guard();
+        std::env::set_var("CLAUDE_CODE_DISABLE_WEB_FETCH", "1");
+        assert!(web_fetch_disabled());
+        assert!(
+            !mvp_tool_specs().iter().any(|spec| spec.name == "WebFetch"),
+            "WebFetch should be absent from the tool list when disabled"
+        );
+        let error = execute_tool("WebFetch", &json!({"url": "https://example.com"}))
+            .expect_err("disabled WebFetch should be rejected");
+        assert!(error.contains("CLAUDE_CODE_DISABLE_WEB_FETCH"));
+
+        std::env::set_var("CLAUDE_CODE_DISABLE_WEB_FETCH", "true");
+        assert!(web_fetch_disabled());
+
+        std::env::remove_var("CLAUDE_CODE_DISABLE_WEB_FETCH");
+        assert!(!web_fetch_disabled());
+        assert!(
+            mvp_tool_specs().iter().any(|spec| spec.name == "WebFetch"),
+            "WebFetch should be listed by default"
+        );
+
+        // A non-1 value does not disable the tool.
+        std::env::set_var("CLAUDE_CODE_DISABLE_WEB_FETCH", "0");
+        assert!(!web_fetch_disabled());
+        std::env::remove_var("CLAUDE_CODE_DISABLE_WEB_FETCH");
+    }
+
+    #[test]
     fn subagent_tool_executor_denies_blocked_tool_before_dispatch() {
         // given
         let policy = permission_policy_for_mode(PermissionMode::ReadOnly);
@@ -7776,6 +7842,9 @@ mod tests {
 
     #[test]
     fn web_fetch_returns_prompt_aware_summary() {
+        // Holds the env lock: WebFetch honors CLAUDE_CODE_DISABLE_WEB_FETCH,
+        // which other tests flip under the same lock.
+        let _guard = env_guard();
         let server = TestServer::spawn(Arc::new(|request_line: &str| {
             assert!(request_line.starts_with("GET /page "));
             HttpResponse::html(
@@ -7816,6 +7885,7 @@ mod tests {
 
     #[test]
     fn web_fetch_supports_plain_text_and_rejects_invalid_url() {
+        let _guard = env_guard();
         let server = TestServer::spawn(Arc::new(|request_line: &str| {
             assert!(request_line.starts_with("GET /plain "));
             HttpResponse::text(200, "OK", "plain text response")

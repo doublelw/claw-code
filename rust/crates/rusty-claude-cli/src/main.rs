@@ -2001,9 +2001,18 @@ fn resolve_model_alias(model: &str) -> &str {
         "opus5-5" | "opus-5-5" => "anthropic/claude-opus-5-5",
         // v2.1.219: Opus 5 remains a valid (non-default) Opus id.
         "opus5" | "opus-5" => "anthropic/claude-opus-5",
-        // v2.1.197: Sonnet 5 is now the default Sonnet with native 1M context.
-        "sonnet" => "anthropic/claude-sonnet-5",
-        "haiku" => "anthropic/claude-haiku-4-5-20251213",
+        // v2.1.284: Sonnet 5.5 is now the default Sonnet model
+        // (1M context, $2/$10 per Mtok, $0.20/Mtok cache reads).
+        "sonnet" => "anthropic/claude-sonnet-5-5",
+        "sonnet5-5" | "sonnet-5-5" => "anthropic/claude-sonnet-5-5",
+        // v2.1.197: Sonnet 5 remains a valid (non-default) Sonnet id.
+        "sonnet5" | "sonnet-5" => "anthropic/claude-sonnet-5",
+        // v2.1.293: Haiku 5.5 is now the default Haiku model
+        // (1M context, $0.10/$0.50 per Mtok, $0.50/$2.50 over 100K).
+        "haiku" => "anthropic/claude-haiku-5-5",
+        "haiku5-5" | "haiku-5-5" => "anthropic/claude-haiku-5-5",
+        // v2.1.197: Haiku 4.5 remains a valid (non-default) Haiku id.
+        "haiku4-5" | "haiku-4-5" => "anthropic/claude-haiku-4-5-20251213",
         // v2.1.257: Fable 5.1 is now the default Fable model (1M context).
         "fable" | "fable5" => "anthropic/claude-fable-5-1",
         "fable5-1" | "fable-5-1" => "anthropic/claude-fable-5-1",
@@ -5567,6 +5576,17 @@ impl RuntimeMcpState {
     }
 }
 
+/// v2.1.292: split MCP tools into usable vs over-the-128-char-name-limit.
+/// A tool whose exposed (qualified) name exceeds 128 characters would make
+/// every API request fail, so it is excluded from the session.
+fn partition_mcp_tools_by_name_limit(
+    tools: &[runtime::ManagedMcpTool],
+) -> (Vec<&runtime::ManagedMcpTool>, Vec<&runtime::ManagedMcpTool>) {
+    tools
+        .iter()
+        .partition(|tool| tool.qualified_name.chars().count() <= 128)
+}
+
 fn build_runtime_mcp_state(
     runtime_config: &runtime::RuntimeConfig,
 ) -> Result<RuntimePluginStateBuildOutput, Box<dyn std::error::Error>> {
@@ -5574,9 +5594,19 @@ fn build_runtime_mcp_state(
         return Ok((None, Vec::new()));
     };
 
-    let mut runtime_tools = discovery
-        .tools
-        .iter()
+    // v2.1.292: an MCP tool with a name longer than 128 characters would make
+    // every API request fail — leave that tool out instead and keep the rest
+    // of the server usable.
+    let (usable, oversized) = partition_mcp_tools_by_name_limit(&discovery.tools);
+    for tool in &oversized {
+        eprintln!(
+            "MCP tool `{}` (server `{}`) has a name longer than 128 characters; the tool is excluded from this session",
+            tool.qualified_name, tool.server_name
+        );
+    }
+
+    let mut runtime_tools = usable
+        .into_iter()
         .map(mcp_runtime_tool_definition)
         .collect::<Vec<_>>();
     if !mcp_state.server_names().is_empty() {
@@ -5653,6 +5683,46 @@ fn prompt_audit_report_json(findings: &[runtime::PromptAuditFinding]) -> Value {
             })
             .collect(),
     )
+}
+
+#[cfg(test)]
+mod mcp_name_limit_tests {
+    use runtime::ManagedMcpTool;
+
+    fn managed_tool(server: &str, qualified: &str) -> ManagedMcpTool {
+        ManagedMcpTool {
+            server_name: server.to_string(),
+            qualified_name: qualified.to_string(),
+            raw_name: "tool".to_string(),
+            tool: runtime::McpTool {
+                name: "tool".to_string(),
+                description: None,
+                input_schema: None,
+                annotations: None,
+                meta: None,
+            },
+        }
+    }
+
+    #[test]
+    fn mcp_tools_over_128_char_names_excluded() {
+        // v2.1.292: an MCP tool with a name longer than 128 characters would
+        // make every request fail; it is left out and the rest stay usable.
+        let ok = managed_tool("srv", "srv__short_tool");
+        let too_long = managed_tool("srv", format!("srv__{}", "x".repeat(200)).as_str());
+        let tools = vec![ok, too_long];
+        let (usable, oversized) = super::partition_mcp_tools_by_name_limit(&tools);
+        assert_eq!(usable.len(), 1);
+        assert_eq!(usable[0].qualified_name, "srv__short_tool");
+        assert_eq!(oversized.len(), 1);
+        assert_eq!(oversized[0].qualified_name.chars().count(), 205);
+        // A name of exactly 128 characters is still usable.
+        let boundary = managed_tool("srv", &format!("srv__{}", "y".repeat(122)));
+        let binding = [boundary];
+        let (usable, oversized) = super::partition_mcp_tools_by_name_limit(&binding);
+        assert_eq!(usable.len(), 1);
+        assert_eq!(oversized.len(), 0);
+    }
 }
 
 #[cfg(test)]
@@ -13081,10 +13151,14 @@ mod tests {
         assert_eq!(resolve_model_alias("opus-5-5"), "anthropic/claude-opus-5-5");
         // v2.1.219: explicit opus-5 stays a valid (non-default) Opus id
         assert_eq!(resolve_model_alias("opus-5"), "anthropic/claude-opus-5");
-        // v2.1.197: sonnet alias now resolves to Sonnet 5
-        assert_eq!(resolve_model_alias("sonnet"), "anthropic/claude-sonnet-5");
+        // v2.1.284: sonnet alias now resolves to Sonnet 5.5
+        assert_eq!(resolve_model_alias("sonnet"), "anthropic/claude-sonnet-5-5");
+        // v2.1.293: haiku alias now resolves to Haiku 5.5
+        assert_eq!(resolve_model_alias("haiku"), "anthropic/claude-haiku-5-5");
+        // Sonnet 5 / Haiku 4.5 stay valid (non-default) ids.
+        assert_eq!(resolve_model_alias("sonnet-5"), "anthropic/claude-sonnet-5");
         assert_eq!(
-            resolve_model_alias("haiku"),
+            resolve_model_alias("haiku-4-5"),
             "anthropic/claude-haiku-4-5-20251213"
         );
         assert_eq!(resolve_model_alias("claude-opus"), "claude-opus");
@@ -13126,7 +13200,7 @@ mod tests {
         assert_eq!(chained, "anthropic/claude-opus-5-5");
         assert_eq!(cross_provider, "grok-3-mini");
         assert_eq!(unknown, "unknown-model");
-        assert_eq!(builtin, "anthropic/claude-haiku-4-5-20251213");
+        assert_eq!(builtin, "anthropic/claude-haiku-5-5");
     }
 
     #[test]
@@ -13565,7 +13639,7 @@ mod tests {
                 ..
             } => {
                 assert_eq!(
-                    model, "anthropic/claude-sonnet-5",
+                    model, "anthropic/claude-sonnet-5-5",
                     "sonnet alias should resolve"
                 );
                 assert_eq!(
@@ -15248,7 +15322,7 @@ mod tests {
             vec!["session-old".to_string()],
         );
 
-        assert!(completions.contains(&"/model anthropic/claude-sonnet-5".to_string()));
+        assert!(completions.contains(&"/model anthropic/claude-sonnet-5-5".to_string()));
         assert!(completions.contains(&"/permissions workspace-write".to_string()));
         assert!(completions.contains(&"/session list".to_string()));
         assert!(completions.contains(&"/session switch session-current".to_string()));
@@ -15323,7 +15397,7 @@ mod tests {
 
         let resolved = with_current_dir(&root, || resolve_repl_model(DEFAULT_MODEL.to_string()));
 
-        assert_eq!(resolved, "anthropic/claude-sonnet-5");
+        assert_eq!(resolved, "anthropic/claude-sonnet-5-5");
 
         std::env::remove_var("ANTHROPIC_MODEL");
         std::env::remove_var("CLAW_CONFIG_HOME");
@@ -17537,11 +17611,11 @@ mod alias_resolution_tests {
         );
         assert_eq!(
             resolve_model_alias_with_config("sonnet"),
-            "anthropic/claude-sonnet-5"
+            "anthropic/claude-sonnet-5-5"
         );
         assert_eq!(
             resolve_model_alias_with_config("haiku"),
-            "anthropic/claude-haiku-4-5-20251213"
+            "anthropic/claude-haiku-5-5"
         );
     }
 

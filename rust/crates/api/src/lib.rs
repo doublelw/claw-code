@@ -43,3 +43,53 @@ pub use telemetry::{
     MemoryTelemetrySink, SessionTraceRecord, SessionTracer, TelemetryEvent, TelemetrySink,
     DEFAULT_ANTHROPIC_VERSION,
 };
+
+/// v2.1.292/296: read a backoff bound (milliseconds) from an environment
+/// variable, falling back to the default when unset or unparsable. Used for
+/// `CLAUDE_CODE_OVERLOADED_RETRY_BASE_DELAY_MS` and
+/// `CLAUDE_CODE_OVERLOADED_RETRY_MAX_DELAY_MS`, which lengthen the backoff
+/// applied when retrying overloaded (529) responses.
+#[must_use]
+pub fn env_backoff_ms(var: &str, default: std::time::Duration) -> std::time::Duration {
+    std::env::var(var)
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .map(std::time::Duration::from_millis)
+        .unwrap_or(default)
+}
+
+#[cfg(test)]
+mod retry_env_tests {
+    use super::env_backoff_ms;
+    use std::time::Duration;
+
+    #[test]
+    fn env_backoff_ms_overrides_and_falls_back() {
+        // v2.1.292/296: the overloaded-retry backoff bounds are env-tunable;
+        // invalid values keep the built-in default.
+        std::env::set_var("CLAUDE_CODE_OVERLOADED_RETRY_BASE_DELAY_MS", "5000");
+        assert_eq!(
+            env_backoff_ms(
+                "CLAUDE_CODE_OVERLOADED_RETRY_BASE_DELAY_MS",
+                Duration::from_secs(1)
+            ),
+            Duration::from_millis(5000)
+        );
+        std::env::set_var("CLAUDE_CODE_OVERLOADED_RETRY_BASE_DELAY_MS", "abc");
+        assert_eq!(
+            env_backoff_ms(
+                "CLAUDE_CODE_OVERLOADED_RETRY_BASE_DELAY_MS",
+                Duration::from_secs(1)
+            ),
+            Duration::from_secs(1)
+        );
+        std::env::remove_var("CLAUDE_CODE_OVERLOADED_RETRY_BASE_DELAY_MS");
+        assert_eq!(
+            env_backoff_ms(
+                "CLAUDE_CODE_OVERLOADED_RETRY_BASE_DELAY_MS",
+                Duration::from_secs(1)
+            ),
+            Duration::from_secs(1)
+        );
+    }
+}

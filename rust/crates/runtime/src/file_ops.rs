@@ -13,6 +13,9 @@ use walkdir::{DirEntry, WalkDir};
 /// Maximum file size that can be read (10 MB).
 const MAX_READ_SIZE: u64 = 10 * 1024 * 1024;
 
+/// v2.1.302: image sources over 128 MB are refused before being loaded.
+const MAX_IMAGE_SOURCE_BYTES: u64 = 128 * 1024 * 1024;
+
 /// Maximum file size that can be written (10 MB).
 const MAX_WRITE_SIZE: usize = 10 * 1024 * 1024;
 
@@ -181,21 +184,49 @@ pub struct GrepSearchOutput {
     pub applied_offset: Option<usize>,
 }
 
+/// v2.1.302: whether a path names an image file (by extension), which the
+/// Read tool refuses to load wholesale above the image size cap.
+fn is_image_source(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
+        Some("png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "ico" | "tiff" | "svg")
+    )
+}
+
 /// Reads a text file and returns a line-windowed payload.
+///
+/// v2.1.296: `allow_large` reads a text file past the usual size limit in
+/// one call, for when the whole file is needed and the context has room.
 pub fn read_file(
     path: &str,
     offset: Option<usize>,
     limit: Option<usize>,
+    allow_large: bool,
 ) -> io::Result<ReadFileOutput> {
     let absolute_path = normalize_path(path)?;
 
     // Check file size before reading
     let metadata = fs::metadata(&absolute_path)?;
-    if metadata.len() > MAX_READ_SIZE {
+    // v2.1.302: an image source (or a pipe/device named like one) over
+    // 128 MB is refused outright instead of being loaded into memory.
+    if is_image_source(&absolute_path) && metadata.len() > MAX_IMAGE_SOURCE_BYTES {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!(
-                "file is too large ({} bytes, max {} bytes)",
+                "image source is too large to read ({} bytes, max {} bytes)",
+                metadata.len(),
+                MAX_IMAGE_SOURCE_BYTES
+            ),
+        ));
+    }
+    if metadata.len() > MAX_READ_SIZE && !allow_large {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "file is too large ({} bytes, max {} bytes); pass allow_large to read it in one call",
                 metadata.len(),
                 MAX_READ_SIZE
             ),
@@ -679,12 +710,13 @@ pub fn read_file_in_workspace(
     path: &str,
     offset: Option<usize>,
     limit: Option<usize>,
+    allow_large: bool,
     workspace_root: &Path,
 ) -> io::Result<ReadFileOutput> {
     let absolute_path = normalize_path(path)?;
     let canonical_root = canonicalize_workspace_root(workspace_root);
     validate_workspace_boundary(&absolute_path, &canonical_root)?;
-    read_file(path, offset, limit)
+    read_file(path, offset, limit, allow_large)
 }
 
 /// Write a file with workspace boundary enforcement.
@@ -777,9 +809,11 @@ mod tests {
 
     use super::{
         component_contains_glob, derive_glob_walk_root, edit_file, expand_braces, glob_search,
-        grep_search, is_symlink_escape, read_file, read_file_in_workspace, write_file,
-        write_file_in_workspace, GrepSearchInput, MAX_WRITE_SIZE,
+        grep_search, is_image_source, is_symlink_escape, read_file, read_file_in_workspace,
+        write_file, write_file_in_workspace, GrepSearchInput, MAX_IMAGE_SOURCE_BYTES,
+        MAX_READ_SIZE, MAX_WRITE_SIZE,
     };
+    use std::path::Path;
 
     fn temp_path(name: &str) -> std::path::PathBuf {
         let unique = SystemTime::now()
@@ -796,7 +830,7 @@ mod tests {
             .expect("write should succeed");
         assert_eq!(write_output.kind, "create");
 
-        let read_output = read_file(path.to_string_lossy().as_ref(), Some(1), Some(1))
+        let read_output = read_file(path.to_string_lossy().as_ref(), Some(1), Some(1), false)
             .expect("read should succeed");
         assert_eq!(read_output.file.content, "two");
     }
@@ -815,11 +849,57 @@ mod tests {
     fn rejects_binary_files() {
         let path = temp_path("binary-test.bin");
         std::fs::write(&path, b"\x00\x01\x02\x03binary content").expect("write should succeed");
-        let result = read_file(path.to_string_lossy().as_ref(), None, None);
+        let result = read_file(path.to_string_lossy().as_ref(), None, None, false);
         assert!(result.is_err());
         let error = result.unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
         assert!(error.to_string().contains("binary"));
+    }
+
+    #[test]
+    fn allow_large_reads_past_size_limit() {
+        // v2.1.296: allow_large reads a text file past the usual 10 MB cap
+        // in one call.
+        let path = temp_path("allow-large.txt");
+        let big = "y".repeat((MAX_READ_SIZE + 1024) as usize);
+        std::fs::write(&path, &big).expect("write big file");
+        let without = read_file(path.to_string_lossy().as_ref(), None, None, false);
+        assert!(without.is_err(), "default read should refuse the big file");
+        let with = read_file(path.to_string_lossy().as_ref(), None, None, true)
+            .expect("allow_large read should succeed");
+        assert!(with.file.content.len() > MAX_READ_SIZE as usize);
+        std::fs::remove_file(&path).expect("clean up big file");
+    }
+
+    #[test]
+    fn image_sources_over_128mb_refused() {
+        // v2.1.302: image sources over 128 MB are refused instead of being
+        // loaded into memory. A sparse file gives the size without the bytes.
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time should move forward")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("clawd-native-huge-{unique}.png"));
+        let file = std::fs::File::create(&path).expect("create image file");
+        file.set_len(MAX_IMAGE_SOURCE_BYTES + 1)
+            .expect("sparsely size the image file");
+        drop(file);
+        let result = read_file(path.to_string_lossy().as_ref(), None, None, true);
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(
+            error.to_string().contains("image source is too large"),
+            "unexpected error: {error}"
+        );
+        std::fs::remove_file(&path).expect("clean up image file");
+    }
+
+    #[test]
+    fn image_source_detection_by_extension() {
+        assert!(is_image_source(Path::new("a/b.PNG")));
+        assert!(is_image_source(Path::new("photo.jpeg")));
+        assert!(!is_image_source(Path::new("notes.txt")));
+        assert!(!is_image_source(Path::new("noext")));
     }
 
     #[test]
@@ -842,16 +922,26 @@ mod tests {
             .expect("write inside workspace should succeed");
 
         // Reading inside workspace should succeed
-        let result =
-            read_file_in_workspace(inside.to_string_lossy().as_ref(), None, None, &workspace);
+        let result = read_file_in_workspace(
+            inside.to_string_lossy().as_ref(),
+            None,
+            None,
+            false,
+            &workspace,
+        );
         assert!(result.is_ok());
 
         // Reading outside workspace should fail
         let outside = temp_path("outside-boundary.txt");
         write_file(outside.to_string_lossy().as_ref(), "unsafe content")
             .expect("write outside should succeed");
-        let result =
-            read_file_in_workspace(outside.to_string_lossy().as_ref(), None, None, &workspace);
+        let result = read_file_in_workspace(
+            outside.to_string_lossy().as_ref(),
+            None,
+            None,
+            false,
+            &workspace,
+        );
         assert!(result.is_err());
         let error = result.unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
@@ -891,8 +981,13 @@ mod tests {
         let link_path = workspace.join("linked-secret.txt");
         std::os::unix::fs::symlink(&outside_file, &link_path).expect("symlink should create");
 
-        let result =
-            read_file_in_workspace(link_path.to_string_lossy().as_ref(), None, None, &workspace);
+        let result = read_file_in_workspace(
+            link_path.to_string_lossy().as_ref(),
+            None,
+            None,
+            false,
+            &workspace,
+        );
 
         assert!(result.is_err(), "symlink escape must be rejected");
         let error = result.unwrap_err();

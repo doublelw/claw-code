@@ -382,6 +382,11 @@ const TOP_LEVEL_FIELDS: &[FieldSpec] = &[
         name: "syncClaudeAiPlugins",
         expected: FieldType::Bool,
     },
+    // v2.1.299: idle compaction on/off.
+    FieldSpec {
+        name: "idleCompaction",
+        expected: FieldType::Bool,
+    },
 ];
 
 const WORKFLOW_FIELDS: &[FieldSpec] = &[FieldSpec {

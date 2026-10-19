@@ -99,6 +99,13 @@ pub struct RuntimeFeatureConfig {
     /// v2.1.281: `"attribution": false` hides all commit and PR attribution.
     /// Defaults to true (attribution shown).
     attribution: bool,
+    /// v2.1.299: idle compaction — a 200K+ token conversation left idle for
+    /// about 54 minutes is compacted before its one-hour prompt cache
+    /// expires. `idleCompaction: false` turns it off.
+    idle_compaction: bool,
+    /// v2.1.299: idle compaction's token minimum;
+    /// `CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS` overrides the 200K default.
+    idle_compact_min_tokens: u32,
     language: Option<String>,
     disable_bundled_skills: bool,
     /// v2.1.186: `!` bash commands trigger Claude to respond to the output.
@@ -430,6 +437,11 @@ impl ConfigLoader {
                     .and_then(|entries| entries.get("attribution")),
                 Some(JsonValue::Bool(false))
             ),
+            idle_compaction: nested_bool(&merged_value, &["idleCompaction"]).unwrap_or(true),
+            idle_compact_min_tokens: session_cap_from_env(
+                "CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS",
+                200_000,
+            ),
             language: parse_optional_string_field(&merged_value, "language"),
             disable_bundled_skills: parse_optional_bool(&merged_value, "disableBundledSkills")
                 .unwrap_or(false)
@@ -549,6 +561,11 @@ impl ConfigLoader {
                     .as_object()
                     .and_then(|entries| entries.get("attribution")),
                 Some(JsonValue::Bool(false))
+            ),
+            idle_compaction: nested_bool(&merged_value, &["idleCompaction"]).unwrap_or(true),
+            idle_compact_min_tokens: session_cap_from_env(
+                "CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS",
+                200_000,
             ),
             language: parse_optional_string_field(&merged_value, "language"),
             disable_bundled_skills: parse_optional_bool(&merged_value, "disableBundledSkills")
@@ -748,6 +765,25 @@ impl RuntimeConfig {
     #[must_use]
     pub fn attribution(&self) -> bool {
         self.feature_config.attribution()
+    }
+
+    /// v2.1.299
+    #[must_use]
+    pub fn idle_compaction(&self) -> bool {
+        self.feature_config.idle_compaction()
+    }
+
+    /// v2.1.299
+    #[must_use]
+    pub fn idle_compact_min_tokens(&self) -> u32 {
+        self.feature_config.idle_compact_min_tokens()
+    }
+
+    /// v2.1.299
+    #[must_use]
+    pub fn should_idle_compact(&self, idle_minutes: u32, total_tokens: u64) -> bool {
+        self.feature_config
+            .should_idle_compact(idle_minutes, total_tokens)
     }
 
     /// v2.1.176
@@ -992,6 +1028,29 @@ impl RuntimeFeatureConfig {
     #[must_use]
     pub fn attribution(&self) -> bool {
         self.attribution
+    }
+
+    /// v2.1.299: false when `"idleCompaction": false` turns idle compaction
+    /// off.
+    #[must_use]
+    pub fn idle_compaction(&self) -> bool {
+        self.idle_compaction
+    }
+
+    /// v2.1.299: idle compaction's token minimum (200K by default).
+    #[must_use]
+    pub fn idle_compact_min_tokens(&self) -> u32 {
+        self.idle_compact_min_tokens
+    }
+
+    /// v2.1.299: whether a conversation left idle should be compacted before
+    /// its one-hour prompt cache expires: enabled, at least the token
+    /// minimum, and idle for about 54 minutes or more.
+    #[must_use]
+    pub fn should_idle_compact(&self, idle_minutes: u32, total_tokens: u64) -> bool {
+        self.idle_compaction()
+            && total_tokens >= u64::from(self.idle_compact_min_tokens())
+            && idle_minutes >= 54
     }
 
     /// v2.1.176: language for session titles / UI localization.
@@ -3356,6 +3415,43 @@ mod tests {
             .load()
             .expect("config should load");
         assert!(loaded.attribution());
+
+        fs::remove_dir_all(root).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn idle_compaction_settings_and_trigger() {
+        // v2.1.299: idle compaction compacts a 200K+ token conversation idle
+        // for ~54 minutes before its 1h prompt cache expires.
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let home = root.join("home").join(".clawc");
+        fs::create_dir_all(&home).expect("home config dir");
+        fs::create_dir_all(&cwd).expect("project dir");
+        fs::write(home.join("settings.json"), "{}").expect("write settings");
+
+        let loaded = ConfigLoader::new(&cwd, &home)
+            .load()
+            .expect("config should load");
+        assert!(loaded.idle_compaction());
+        assert_eq!(loaded.idle_compact_min_tokens(), 200_000);
+        assert!(loaded.should_idle_compact(54, 250_000));
+        assert!(
+            !loaded.should_idle_compact(53, 250_000),
+            "below idle window"
+        );
+        assert!(
+            !loaded.should_idle_compact(54, 199_999),
+            "below token floor"
+        );
+
+        fs::write(home.join("settings.json"), r#"{"idleCompaction": false}"#)
+            .expect("write disabled settings");
+        let loaded = ConfigLoader::new(&cwd, &home)
+            .load()
+            .expect("config should load");
+        assert!(!loaded.idle_compaction());
+        assert!(!loaded.should_idle_compact(120, 500_000));
 
         fs::remove_dir_all(root).expect("cleanup temp dir");
     }

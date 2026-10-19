@@ -650,11 +650,43 @@ const SECRET_TOKEN_PREFIXES: &[&str] = &[
     "sk-ant-", "sk-",
 ];
 
+/// v2.1.285: redact the password in `scheme://user:pass@host` URLs before
+/// display or logging. A password containing a raw `@` is fully redacted by
+/// splitting on the LAST `@` of the userinfo segment; a `%40`-encoded `@`
+/// stays inside the password segment either way.
+fn redact_url_credentials(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut cursor = 0usize;
+    let mut copied = 0usize;
+    while let Some(rel) = input[cursor..].find("://") {
+        let scheme_end = cursor + rel + 3;
+        let after = &input[scheme_end..];
+        let authority_len = after
+            .find(|c| c == '/' || c == ' ' || c == '?' || c == '#')
+            .unwrap_or(after.len());
+        let authority = &after[..authority_len];
+        if let Some(at) = authority.rfind('@') {
+            if let Some(colon) = authority[..at].find(':') {
+                out.push_str(&input[copied..scheme_end]);
+                out.push_str(&authority[..colon + 1]);
+                out.push_str("<redacted>");
+                out.push_str(&authority[at..]);
+                copied = scheme_end + authority_len;
+            }
+        }
+        // Scan past this authority (>=1 byte so the loop always advances).
+        cursor = scheme_end + authority_len.max(1);
+    }
+    out.push_str(&input[copied..]);
+    out
+}
+
 /// v2.1.232: redact bearer/secret tokens from a string before display or
 /// logging. Tokens from known families keep their prefix (so the operator can
 /// see which family leaked) but the body is replaced with `<redacted>`.
 #[must_use]
 pub fn redact_secrets(input: &str) -> String {
+    let input = &redact_url_credentials(input);
     let mut out = String::with_capacity(input.len());
     let bytes = input.as_bytes();
     let mut i = 0usize;
@@ -736,6 +768,68 @@ fn find_last_unescaped(value: &str, needle: char) -> Option<usize> {
     None
 }
 
+/// v2.1.289: strip leading `VAR=value` environment assignment prefixes from a
+/// shell command, so permission rules keep matching the command that actually
+/// runs (e.g. `TZ="$HOME" rm -rf build` must still hit a `rm -rf` deny rule).
+/// Quoted values may contain spaces; unquoted values run to the next
+/// whitespace; multiple assignments are all stripped.
+fn strip_env_assignment_prefixes(command: &str) -> &str {
+    let mut rest = command.trim_start();
+    while let Some(consumed) = take_env_assignment(rest) {
+        rest = consumed.trim_start();
+    }
+    rest
+}
+
+/// Consume one leading `NAME=value` assignment, returning the remainder.
+fn take_env_assignment(command: &str) -> Option<&str> {
+    let mut chars = command.char_indices();
+    let (_, first) = chars.next()?;
+    if !(first.is_ascii_alphabetic() || first == '_') {
+        return None;
+    }
+    let mut eq = None;
+    for (idx, ch) in chars {
+        if ch == '=' {
+            eq = Some(idx);
+            break;
+        }
+        if !(ch.is_ascii_alphanumeric() || ch == '_') {
+            return None;
+        }
+    }
+    let eq = eq?;
+    let mut rest = &command[eq + 1..];
+    if let Some(value) = rest.strip_prefix('\'') {
+        // Single-quoted: runs to the next single quote (no escapes).
+        let close = value.find('\'')? + 1;
+        rest = &value[close + 1..];
+    } else if rest.starts_with('"') {
+        // Double-quoted: backslash escapes the next character.
+        let bytes = rest.as_bytes();
+        let mut idx = 1;
+        while idx < bytes.len() {
+            match bytes[idx] {
+                b'\\' => idx += 2,
+                b'"' => {
+                    idx += 1;
+                    break;
+                }
+                _ => idx += 1,
+            }
+        }
+        if idx > bytes.len() {
+            return None;
+        }
+        rest = &rest[idx..];
+    } else {
+        // Unquoted: consume to the next whitespace.
+        let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+        rest = &rest[end..];
+    }
+    Some(rest)
+}
+
 fn extract_permission_subject(input: &str) -> Option<String> {
     let parsed = serde_json::from_str::<Value>(input).ok();
     if let Some(Value::Object(object)) = parsed {
@@ -752,6 +846,11 @@ fn extract_permission_subject(input: &str) -> Option<String> {
             "message",
         ] {
             if let Some(value) = object.get(key).and_then(Value::as_str) {
+                // v2.1.289: env-assignment prefixes hide the command from
+                // rule matching — compare against the command that runs.
+                if key == "command" {
+                    return Some(strip_env_assignment_prefixes(value).to_string());
+                }
                 return Some(value.to_string());
             }
         }
@@ -1053,6 +1152,36 @@ mod tests {
         assert_eq!(redact_secrets("glpat- alone"), "glpat- alone");
     }
 
+    #[test]
+    fn url_passwords_redacted() {
+        // v2.1.285: URL userinfo passwords are redacted, including raw-@
+        // and %40-encoded passwords that earlier redaction partially showed.
+        assert_eq!(
+            redact_secrets("git push https://user:secretpw@example.com/repo.git"),
+            "git push https://user:<redacted>@example.com/repo.git"
+        );
+        // Raw `@` inside the password: split on the LAST `@`.
+        assert_eq!(
+            redact_secrets("curl https://user:p@ss@example.com/api"),
+            "curl https://user:<redacted>@example.com/api"
+        );
+        // `%40`-encoded `@`: fully redacted, nothing leaks.
+        assert_eq!(
+            redact_secrets("curl https://user:p%40ss@example.com/api"),
+            "curl https://user:<redacted>@example.com/api"
+        );
+        // No password (bare user@host) and no userinfo: unchanged.
+        assert_eq!(
+            redact_secrets("curl https://deploy@example.com/x https://example.com/y"),
+            "curl https://deploy@example.com/x https://example.com/y"
+        );
+        // Two credentialed URLs in one string both get redacted.
+        assert_eq!(
+            redact_secrets("https://a:pw1@x.com https://b:pw2@y.org"),
+            "https://a:<redacted>@x.com https://b:<redacted>@y.org"
+        );
+    }
+
     // --- v2.1.246: Bash rule wildcard-before-subcommand warning ---
 
     #[test]
@@ -1086,6 +1215,31 @@ mod tests {
         assert!(rule.matches("Bash", r#"{"command":"git commit -x --amend"}"#));
         assert!(!rule.matches("Bash", r#"{"command":"git push"}"#));
         assert!(!rule.matches("Bash", r#"{"command":"git commit --amend --all"}"#));
+    }
+
+    #[test]
+    fn env_assignment_prefix_still_matches_rules() {
+        // v2.1.289: `VAR=value` prefixes must not hide a command from
+        // deny/ask rules (expanded quoted values and bare assignments alike).
+        let rule = PermissionRule::parse("Bash(rm -rf:*)");
+        assert!(
+            rule.matches("Bash", r#"{"command":"TZ=\"$HOME\" rm -rf build"}"#),
+            "quoted expanded env prefix must not hide rm -rf"
+        );
+        assert!(
+            rule.matches("Bash", r#"{"command":"FOO=bar rm -rf build"}"#),
+            "bare env assignment must not hide rm -rf"
+        );
+        assert!(
+            rule.matches("Bash", r#"{"command":"OPT=\"a b\" LC_ALL=C rm -rf build"}"#),
+            "multiple assignments with spaces in values must not hide rm -rf"
+        );
+        // A command with no env prefix is unaffected.
+        assert!(rule.matches("Bash", r#"{"command":"rm -rf build"}"#));
+        // Non-matching commands still don't match.
+        assert!(!rule.matches("Bash", r#"{"command":"FOO=bar ls build"}"#));
+        // An assignment whose name is not a valid identifier is left alone.
+        assert!(!rule.matches("Bash", r#"{"command":"2x=1 rm -rf build"}"#));
     }
 
     #[test]

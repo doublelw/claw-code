@@ -92,6 +92,18 @@ fn workflow_concurrency_from_env() -> usize {
     }
 }
 
+/// v2.1.296: `CLAUDE_CODE_WORKFLOW_SUBAGENT_MODEL` runs every workflow agent
+/// on one model while other subagents keep theirs. Empty/unset keeps the
+/// workflow's own model (or the built-in fallback).
+fn resolve_workflow_model(config_model: Option<&str>) -> String {
+    std::env::var("CLAUDE_CODE_WORKFLOW_SUBAGENT_MODEL")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .or_else(|| config_model.map(str::to_string))
+        .unwrap_or_else(|| "claude-3-5-sonnet-20241022".to_string())
+}
+
 pub struct WorkflowRuntime {
     max_concurrent_agents: usize,
     max_total_agents: usize,
@@ -123,10 +135,7 @@ impl WorkflowRuntime {
                 .api_base_url
                 .clone()
                 .unwrap_or_else(|| "https://open.bigmodel.cn/api/anthropic".to_string()),
-            model: config
-                .model
-                .clone()
-                .unwrap_or_else(|| "claude-3-5-sonnet-20241022".to_string()),
+            model: resolve_workflow_model(config.model.as_deref()),
             ..Default::default()
         }));
 
@@ -495,6 +504,36 @@ mod tests {
         // Unset → default
         std::env::remove_var("CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS");
         assert_eq!(WorkflowRuntime::new().max_concurrent_agents, 16);
+    }
+
+    #[test]
+    fn workflow_subagent_model_env_overrides_config() {
+        // v2.1.296: CLAUDE_CODE_WORKFLOW_SUBAGENT_MODEL runs every workflow
+        // agent on one model; other subagents keep theirs.
+        std::env::set_var("CLAUDE_CODE_WORKFLOW_SUBAGENT_MODEL", "glm-5.3");
+        assert_eq!(
+            resolve_workflow_model(Some("claude-sonnet-5-5")),
+            "glm-5.3",
+            "env wins over the workflow's own model"
+        );
+        assert_eq!(
+            resolve_workflow_model(None),
+            "glm-5.3",
+            "env wins over the built-in fallback"
+        );
+        // An empty value is ignored.
+        std::env::set_var("CLAUDE_CODE_WORKFLOW_SUBAGENT_MODEL", "  ");
+        assert_eq!(
+            resolve_workflow_model(Some("claude-sonnet-5-5")),
+            "claude-sonnet-5-5"
+        );
+        // Unset: the workflow's model, else the built-in fallback.
+        std::env::remove_var("CLAUDE_CODE_WORKFLOW_SUBAGENT_MODEL");
+        assert_eq!(
+            resolve_workflow_model(Some("claude-sonnet-5-5")),
+            "claude-sonnet-5-5"
+        );
+        assert_eq!(resolve_workflow_model(None), "claude-3-5-sonnet-20241022");
     }
 
     #[test]

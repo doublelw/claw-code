@@ -125,8 +125,14 @@ impl OpenAiCompatClient {
             config,
             base_url: read_base_url(config),
             max_retries: DEFAULT_MAX_RETRIES,
-            initial_backoff: DEFAULT_INITIAL_BACKOFF,
-            max_backoff: DEFAULT_MAX_BACKOFF,
+            initial_backoff: crate::env_backoff_ms(
+                "CLAUDE_CODE_OVERLOADED_RETRY_BASE_DELAY_MS",
+                DEFAULT_INITIAL_BACKOFF,
+            ),
+            max_backoff: crate::env_backoff_ms(
+                "CLAUDE_CODE_OVERLOADED_RETRY_MAX_DELAY_MS",
+                DEFAULT_MAX_BACKOFF,
+            ),
         }
     }
 

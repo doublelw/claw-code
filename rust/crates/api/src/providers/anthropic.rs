@@ -132,8 +132,14 @@ impl AnthropicClient {
             auth: AuthSource::ApiKey(api_key.into()),
             base_url: DEFAULT_BASE_URL.to_string(),
             max_retries: DEFAULT_MAX_RETRIES,
-            initial_backoff: DEFAULT_INITIAL_BACKOFF,
-            max_backoff: DEFAULT_MAX_BACKOFF,
+            initial_backoff: crate::env_backoff_ms(
+                "CLAUDE_CODE_OVERLOADED_RETRY_BASE_DELAY_MS",
+                DEFAULT_INITIAL_BACKOFF,
+            ),
+            max_backoff: crate::env_backoff_ms(
+                "CLAUDE_CODE_OVERLOADED_RETRY_MAX_DELAY_MS",
+                DEFAULT_MAX_BACKOFF,
+            ),
             request_profile: AnthropicRequestProfile::default(),
             session_tracer: None,
             prompt_cache: None,
@@ -148,8 +154,14 @@ impl AnthropicClient {
             auth,
             base_url: DEFAULT_BASE_URL.to_string(),
             max_retries: DEFAULT_MAX_RETRIES,
-            initial_backoff: DEFAULT_INITIAL_BACKOFF,
-            max_backoff: DEFAULT_MAX_BACKOFF,
+            initial_backoff: crate::env_backoff_ms(
+                "CLAUDE_CODE_OVERLOADED_RETRY_BASE_DELAY_MS",
+                DEFAULT_INITIAL_BACKOFF,
+            ),
+            max_backoff: crate::env_backoff_ms(
+                "CLAUDE_CODE_OVERLOADED_RETRY_MAX_DELAY_MS",
+                DEFAULT_MAX_BACKOFF,
+            ),
             request_profile: AnthropicRequestProfile::default(),
             session_tracer: None,
             prompt_cache: None,

@@ -67,6 +67,17 @@ impl EffortLevel {
     }
 }
 
+/// v2.1.316: the effort level subagents run at when nothing else names one.
+/// `CLAUDE_CODE_SUBAGENT_EFFORT` sets a session-wide default; without it,
+/// subagents inherit the session's effort. Invalid values fall back to
+/// inheriting (None).
+#[must_use]
+pub fn subagent_effort_default() -> Option<EffortLevel> {
+    std::env::var("CLAUDE_CODE_SUBAGENT_EFFORT")
+        .ok()
+        .and_then(|value| EffortLevel::from_str(value.trim()))
+}
+
 impl std::fmt::Display for EffortLevel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
@@ -81,7 +92,7 @@ impl Default for EffortLevel {
 
 #[cfg(test)]
 mod tests {
-    use super::EffortLevel;
+    use super::{subagent_effort_default, EffortLevel};
 
     #[test]
     fn parses_all_levels() {
@@ -178,5 +189,19 @@ mod tests {
     #[test]
     fn display_label_balanced_for_medium() {
         assert_eq!(EffortLevel::Medium.display_label(), "Balanced");
+    }
+
+    #[test]
+    fn subagent_effort_default_from_env() {
+        // v2.1.316: CLAUDE_CODE_SUBAGENT_EFFORT sets subagents' default
+        // effort; unset/invalid values inherit the session's effort.
+        std::env::set_var("CLAUDE_CODE_SUBAGENT_EFFORT", "low");
+        assert_eq!(subagent_effort_default(), Some(EffortLevel::Low));
+        std::env::set_var("CLAUDE_CODE_SUBAGENT_EFFORT", "high");
+        assert_eq!(subagent_effort_default(), Some(EffortLevel::High));
+        std::env::set_var("CLAUDE_CODE_SUBAGENT_EFFORT", "bogus");
+        assert_eq!(subagent_effort_default(), None);
+        std::env::remove_var("CLAUDE_CODE_SUBAGENT_EFFORT");
+        assert_eq!(subagent_effort_default(), None);
     }
 }

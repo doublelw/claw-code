@@ -85,7 +85,14 @@ impl PermissionClassifier {
         // v2.1.259: with `--permission-prompts none`, anything that would
         // prompt is denied outright (unattended hosts).
         let prompts_disabled = std::env::var("CLAWC_PERMISSION_PROMPTS").as_deref() == Ok("none");
-        match (classified, prompts_disabled) {
+        // v2.1.319: `denyInsteadOfPrompting` denies every tool that would
+        // otherwise prompt and lets the agent continue without it.
+        let deny_instead = std::env::var("CLAWC_DENY_INSTEAD_OF_PROMPTING")
+            .as_deref()
+            .map(str::trim)
+            .map(|v| matches!(v, "1" | "true" | "on"))
+            .unwrap_or(false);
+        match (classified, prompts_disabled || deny_instead) {
             (Classification::Prompt, true) => Classification::Deny,
             (other, _) => other,
         }

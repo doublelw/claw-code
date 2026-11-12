@@ -165,6 +165,9 @@ pub struct RuntimePermissionRuleConfig {
     /// Unlike the `deny` rules (pattern-based), `denied_tools` is a flat list of
     /// tool names that are unconditionally denied regardless of permission mode.
     denied_tools: Vec<String>,
+    /// v2.1.319: `permissions.denyInsteadOfPrompting` — a tool call that would
+    /// wait on a permission prompt is denied and the turn continues.
+    deny_instead_of_prompting: bool,
 }
 
 /// Collection of configured MCP servers after scope-aware merging.
@@ -1454,6 +1457,7 @@ impl RuntimePermissionRuleConfig {
             deny,
             ask,
             denied_tools,
+            deny_instead_of_prompting: false,
         }
     }
 
@@ -1475,6 +1479,12 @@ impl RuntimePermissionRuleConfig {
     #[must_use]
     pub fn denied_tools(&self) -> &[String] {
         &self.denied_tools
+    }
+
+    /// v2.1.319: deny (rather than wait on) any tool call that would prompt.
+    #[must_use]
+    pub fn deny_instead_of_prompting(&self) -> bool {
+        self.deny_instead_of_prompting
     }
 }
 
@@ -1660,6 +1670,12 @@ fn parse_optional_permission_rules(
             "merged settings.permissions",
         )?
         .unwrap_or_default(),
+        deny_instead_of_prompting: optional_bool(
+            permissions,
+            "denyInsteadOfPrompting",
+            "merged settings.permissions",
+        )?
+        .unwrap_or(false),
     })
 }
 
@@ -3452,6 +3468,35 @@ mod tests {
             .expect("config should load");
         assert!(!loaded.idle_compaction());
         assert!(!loaded.should_idle_compact(120, 500_000));
+
+        fs::remove_dir_all(root).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn parses_deny_instead_of_prompting_setting() {
+        // v2.1.319: permissions.denyInsteadOfPrompting denies instead of
+        // waiting on a prompt.
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let home = root.join("home").join(".clawc");
+        fs::create_dir_all(&home).expect("home config dir");
+        fs::create_dir_all(&cwd).expect("project dir");
+        fs::write(
+            home.join("settings.json"),
+            r#"{"permissions":{"denyInsteadOfPrompting":true}}"#,
+        )
+        .expect("write settings");
+
+        let loaded = ConfigLoader::new(&cwd, &home)
+            .load()
+            .expect("config should load");
+        assert!(loaded.permission_rules().deny_instead_of_prompting());
+
+        fs::write(home.join("settings.json"), "{}").expect("write empty settings");
+        let loaded = ConfigLoader::new(&cwd, &home)
+            .load()
+            .expect("config should load");
+        assert!(!loaded.permission_rules().deny_instead_of_prompting());
 
         fs::remove_dir_all(root).expect("cleanup temp dir");
     }

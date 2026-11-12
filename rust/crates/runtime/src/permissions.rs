@@ -106,6 +106,9 @@ pub struct PermissionPolicy {
     /// denied regardless of permission mode, checked before the rule-based
     /// deny/allow/ask evaluation.
     denied_tools: Vec<String>,
+    /// v2.1.319: `permissions.denyInsteadOfPrompting` — a call that would
+    /// wait on a prompt is denied and the turn continues.
+    deny_instead_of_prompting: bool,
 }
 
 impl PermissionPolicy {
@@ -118,6 +121,7 @@ impl PermissionPolicy {
             deny_rules: Vec::new(),
             ask_rules: Vec::new(),
             denied_tools: Vec::new(),
+            deny_instead_of_prompting: false,
         }
     }
 
@@ -150,6 +154,7 @@ impl PermissionPolicy {
             .map(|rule| PermissionRule::parse(rule))
             .collect();
         self.denied_tools = config.denied_tools().to_vec();
+        self.deny_instead_of_prompting = config.deny_instead_of_prompting();
         self
     }
 
@@ -222,7 +227,7 @@ impl PermissionPolicy {
                     || format!("tool '{tool_name}' requires approval due to hook guidance"),
                     ToOwned::to_owned,
                 );
-                return Self::prompt_or_deny(
+                return self.prompt_or_deny(
                     tool_name,
                     input,
                     current_mode,
@@ -237,7 +242,7 @@ impl PermissionPolicy {
                         "tool '{tool_name}' requires approval due to ask rule '{}'",
                         rule.raw
                     );
-                    return Self::prompt_or_deny(
+                    return self.prompt_or_deny(
                         tool_name,
                         input,
                         current_mode,
@@ -261,7 +266,7 @@ impl PermissionPolicy {
                 "tool '{tool_name}' requires approval due to ask rule '{}'",
                 rule.raw
             );
-            return Self::prompt_or_deny(
+            return self.prompt_or_deny(
                 tool_name,
                 input,
                 current_mode,
@@ -278,6 +283,13 @@ impl PermissionPolicy {
             return PermissionOutcome::Allow;
         }
 
+        // v2.1.312: a Bash command that writes a file is allowed when a
+        // Write/Edit rule covers the redirect target or an ancestor of it.
+        if tool_name.eq_ignore_ascii_case("bash") && bash_write_covered_by(&self.allow_rules, input)
+        {
+            return PermissionOutcome::Allow;
+        }
+
         if current_mode == PermissionMode::Prompt
             || (current_mode == PermissionMode::WorkspaceWrite
                 && required_mode == PermissionMode::DangerFullAccess)
@@ -287,7 +299,7 @@ impl PermissionPolicy {
                 current_mode.as_str(),
                 required_mode.as_str()
             ));
-            return Self::prompt_or_deny(
+            return self.prompt_or_deny(
                 tool_name,
                 input,
                 current_mode,
@@ -307,6 +319,7 @@ impl PermissionPolicy {
     }
 
     fn prompt_or_deny(
+        &self,
         tool_name: &str,
         input: &str,
         current_mode: PermissionMode,
@@ -317,7 +330,15 @@ impl PermissionPolicy {
         // v2.1.259: `--permission-prompts none` (CLAWC_PERMISSION_PROMPTS=none)
         // for unattended hosts — anything that would prompt is denied outright
         // without consulting a prompter.
-        if permission_prompts_disabled() {
+        // v2.1.319: the `denyInsteadOfPrompting` setting (or its env
+        // equivalent) does the same per-session: deny and let the turn
+        // continue instead of waiting on a prompt.
+        let deny_instead = self.deny_instead_of_prompting
+            || matches!(
+                std::env::var("CLAWC_DENY_INSTEAD_OF_PROMPTING").as_deref(),
+                Ok("1") | Ok("true") | Ok("on")
+            );
+        if permission_prompts_disabled() || deny_instead {
             return PermissionOutcome::Deny {
                 reason: reason.unwrap_or_else(|| {
                     format!(
@@ -513,6 +534,11 @@ fn parse_rule_matcher(content: &str) -> PermissionRuleMatcher {
         } else {
             PermissionRuleMatcher::Exact(unescaped)
         }
+    } else if unescaped.ends_with('/') {
+        // v2.1.312: a directory form (e.g. `Edit(src/)`) is a Prefix rule
+        // so it authorizes writes anywhere under that directory — including
+        // Bash redirects into it.
+        PermissionRuleMatcher::Prefix(unescaped.clone())
     } else {
         PermissionRuleMatcher::Exact(unescaped)
     }
@@ -522,6 +548,146 @@ fn parse_rule_matcher(content: &str) -> PermissionRuleMatcher {
 /// with no path separators, spaces, or glob characters.
 fn is_param_key(s: &str) -> bool {
     !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// v2.1.306: strip leading time, environment, and pipeline prefixes so
+/// permission rules keep matching the command that actually runs —
+/// `time cmd`, `VAR=x cmd`, `env ... cmd`, `timeout N cmd`, `nice cmd`,
+/// `command cmd`, `sudo cmd`, `sudo -u user cmd`, and a leading pipeline
+/// segment piped into a command.
+fn strip_bash_prefixes(command: &str) -> &str {
+    let env_stripped = strip_env_assignment_prefixes(command);
+    let rest = match env_stripped.strip_prefix("time ") {
+        Some(t) => t.trim_start(),
+        None => env_stripped,
+    };
+    let rest = match rest.strip_prefix("env ") {
+        Some(t) => t.trim_start(),
+        None => rest,
+    };
+    let rest = match rest.strip_prefix("command ") {
+        Some(t) => t.trim_start(),
+        None => rest,
+    };
+    let rest = match rest.strip_prefix("timeout ") {
+        Some(t) => {
+            // `timeout 5 cmd`: also strip a bare duration token.
+            let t = t.trim_start();
+            let token_end = t.find(char::is_whitespace).unwrap_or(t.len());
+            let token = &t[..token_end];
+            let is_duration = !token.is_empty()
+                && token
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || matches!(b, b's' | b'm' | b'h' | b'.'));
+            if is_duration {
+                &t[token_end..].trim_start()
+            } else {
+                t
+            }
+        }
+        None => rest,
+    };
+    let rest = match rest.strip_prefix("nice ") {
+        Some(t) => t.trim_start(),
+        None => rest,
+    };
+    let rest = match rest.strip_prefix("sudo ") {
+        Some(t) => {
+            let t = t.trim_start();
+            // `sudo -u user cmd`: also strip the -u user pair.
+            if let Some(after_user) = t.strip_prefix("-u ") {
+                let user_end = after_user
+                    .find(char::is_whitespace)
+                    .unwrap_or(after_user.len());
+                if user_end > 0 {
+                    &after_user[user_end..].trim_start()
+                } else {
+                    after_user.trim_start()
+                }
+            } else {
+                t
+            }
+        }
+        None => rest,
+    };
+    let rest = match rest.strip_prefix("true ") {
+        Some(t) => t.trim_start(),
+        None => rest,
+    };
+    // A leading pipeline: `head -n 100 | tee log` runs `tee log` — the
+    // command piped into the next stage is what runs, not the head.
+    let rest = match rest
+        .rsplit(|c| c == '|' || c == '&')
+        .find(|s| !s.trim().is_empty())
+    {
+        Some(segment) => segment.trim(),
+        None => rest,
+    };
+    rest
+}
+
+/// v2.1.312: when a Bash command writes a file, check the write path's
+/// parent directory, its ancestors, and the workspace root — one
+/// `write` permission anywhere in that chain must authorize the write.
+fn bash_writes_to_file(command: &str) -> Option<String> {
+    let mut found: Option<Vec<char>> = None;
+    let bytes = command.as_bytes();
+    let mut idx = 0;
+    while idx < bytes.len() {
+        if bytes[idx] == b'>' {
+            let target = &command[idx + 1..];
+            let trimmed = target.trim_start();
+            let target = if trimmed.starts_with('>') {
+                &trimmed[1..]
+            } else {
+                trimmed
+            };
+            let target = target.trim_start();
+            // A bare redirect with no target (e.g. `> ` followed by `|`)
+            // means nothing — skip it.
+            let target_end = target
+                .find(|c: char| c == ' ' || c == '\t' || c == '|' || c == ';')
+                .unwrap_or(target.len());
+            let candidate = target[..target_end].trim();
+            if !candidate.is_empty()
+                && !candidate.starts_with(|c: char| c.is_ascii_digit())
+                && found.is_none()
+            {
+                found = Some(candidate.chars().collect());
+            }
+            idx += 1;
+            continue;
+        }
+        idx += 1;
+    }
+    found.map(|chars| chars.into_iter().collect())
+}
+
+/// v2.1.312: when a Bash command writes a file, a Write/Edit rule covering
+/// the target path — or any ancestor directory of it — authorizes the write.
+fn bash_write_covered_by(rules: &[PermissionRule], input: &str) -> bool {
+    let Some(command) = extract_tool_param(input, "command") else {
+        return false;
+    };
+    let Some(target) = bash_writes_to_file(&command) else {
+        return false;
+    };
+    let target_path = std::path::Path::new(&target);
+    rules.iter().any(|rule| {
+        if !matches!(
+            rule.tool_name.as_str(),
+            "Write" | "write_file" | "Edit" | "edit_file"
+        ) {
+            return false;
+        }
+        match &rule.matcher {
+            PermissionRuleMatcher::Prefix(prefix) => target_path
+                .ancestors()
+                .any(|ancestor| ancestor.to_string_lossy().starts_with(prefix.as_str())),
+            PermissionRuleMatcher::Exact(expected) => target == *expected,
+            _ => false,
+        }
+    })
 }
 
 /// v2.1.178: extract a single parameter value from a tool's JSON input.
@@ -846,12 +1012,21 @@ fn extract_permission_subject(input: &str) -> Option<String> {
             "message",
         ] {
             if let Some(value) = object.get(key).and_then(Value::as_str) {
-                // v2.1.289: env-assignment prefixes hide the command from
-                // rule matching — compare against the command that runs.
-                if key == "command" {
-                    return Some(strip_env_assignment_prefixes(value).to_string());
+                match key {
+                    "command" => {
+                        // v2.1.289: env-assignment prefixes hide the command
+                        // from rule matching; v2.1.306 extends the strip to
+                        // time/env/timeout/nice/command/sudo prefixes and a
+                        // leading pipeline segment.
+                        return Some(strip_bash_prefixes(value).to_string());
+                    }
+                    "path" | "file_path" | "filePath" | "notebook_path" | "notebookPath" => {
+                        // v2.1.312: a Bash write target is a path — match it
+                        // against Write/Edit rules.
+                        return Some(value.to_string());
+                    }
+                    _ => return Some(value.to_string()),
                 }
-                return Some(value.to_string());
             }
         }
     }
@@ -862,9 +1037,10 @@ fn extract_permission_subject(input: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        bash_rule_wildcard_warning, neutralize_tool_input_preview, redact_secrets,
-        PermissionContext, PermissionMode, PermissionOutcome, PermissionOverride, PermissionPolicy,
-        PermissionPromptDecision, PermissionPrompter, PermissionRequest, PermissionRule,
+        bash_rule_wildcard_warning, bash_write_covered_by, neutralize_tool_input_preview,
+        redact_secrets, PermissionContext, PermissionMode, PermissionOutcome, PermissionOverride,
+        PermissionPolicy, PermissionPromptDecision, PermissionPrompter, PermissionRequest,
+        PermissionRule,
     };
     use crate::config::RuntimePermissionRuleConfig;
 
@@ -1197,6 +1373,81 @@ mod tests {
         assert_eq!(bash_rule_wildcard_warning("Bash(git:*)"), None);
         assert_eq!(bash_rule_wildcard_warning("Bash(git status)"), None);
         assert_eq!(bash_rule_wildcard_warning("Bash(git *)"), None);
+    }
+
+    #[test]
+    fn time_env_pipeline_prefixes_still_match_rules() {
+        // v2.1.306: `time cmd`, `VAR=x cmd`, `env ... cmd`, `timeout N cmd`,
+        // `nice cmd`, `command cmd`, `sudo cmd`, and a leading pipeline
+        // segment must not hide a command from permission rules.
+        let rule = PermissionRule::parse("Bash(rm -rf:*)");
+        let input = |command: &str| -> String { format!(r#"{{"command":"{}"}}"#, command) };
+        assert!(rule.matches("Bash", &input("time rm -rf build")));
+        assert!(rule.matches("Bash", &input("env rm -rf build")));
+        assert!(rule.matches("Bash", &input("timeout 5 rm -rf build")));
+        assert!(rule.matches("Bash", &input("nice rm -rf build")));
+        assert!(rule.matches("Bash", &input("command rm -rf build")));
+        assert!(rule.matches("Bash", &input("sudo rm -rf build")));
+        assert!(rule.matches("Bash", &input("sudo -u user rm -rf build")));
+        // A pipeline: `head -n 100 | tee log` — the last stage writes, so
+        // the `tee` rule must still match.
+        let tee_rule = PermissionRule::parse("Bash(tee:*)");
+        assert!(tee_rule.matches("Bash", &input("head -n 100 | tee log")));
+        assert!(tee_rule.matches("Bash", &input("x | tee log")));
+        // A non-matching command still doesn't match, with or without prefix.
+        assert!(!rule.matches("Bash", &input("time ls build")));
+        assert!(!rule.matches("Bash", &input("ls build")));
+    }
+
+    #[test]
+    fn bash_write_file_ancestor_rules_match() {
+        // v2.1.312: when a Bash command writes a file, a Write/Edit rule
+        // covering the target or any ancestor directory authorizes it.
+        let rules = vec![
+            PermissionRule::parse("Edit(src/)"),
+            PermissionRule::parse("Write(project/)"),
+            PermissionRule::parse("Read(other/)"),
+        ];
+        assert!(bash_write_covered_by(
+            &rules,
+            r#"{"command":"echo hi > src/hello.txt"}"#
+        ));
+        // An ancestor directory rule covers a deeper path.
+        assert!(bash_write_covered_by(
+            &rules,
+            r#"{"command":"echo hi > project/src/hello.txt"}"#
+        ));
+        // A non-ancestor / read-only rule must not authorize the write.
+        assert!(!bash_write_covered_by(
+            &rules,
+            r#"{"command":"echo hi > unrelated/hello.txt"}"#
+        ));
+        // A command with no redirect writes no file.
+        assert!(!bash_write_covered_by(&rules, r#"{"command":"echo hi"}"#));
+    }
+
+    #[test]
+    fn deny_instead_of_prompting_denies_ask_rule() {
+        // v2.1.319: with deny-instead-of-prompting on, an ask rule denies
+        // instead of consulting a prompter; the turn continues.
+        let rules = RuntimePermissionRuleConfig::new(
+            Vec::new(),
+            Vec::new(),
+            vec!["bash(git:*)".to_string()],
+            Vec::new(),
+        );
+        let policy = PermissionPolicy::new(PermissionMode::DangerFullAccess)
+            .with_tool_requirement("bash", PermissionMode::DangerFullAccess)
+            .with_permission_rules(&rules);
+        std::env::set_var("CLAWC_DENY_INSTEAD_OF_PROMPTING", "1");
+        let mut prompter = RecordingPrompter {
+            seen: Vec::new(),
+            allow: true,
+        };
+        let outcome = policy.authorize("bash", r#"{"command":"git status"}"#, Some(&mut prompter));
+        std::env::remove_var("CLAWC_DENY_INSTEAD_OF_PROMPTING");
+        assert!(matches!(outcome, PermissionOutcome::Deny { .. }));
+        assert!(prompter.seen.is_empty(), "no prompt should be consulted");
     }
 
     #[test]

@@ -262,6 +262,46 @@ pub fn loopback_redirect_uri(port: u16) -> String {
     format!("http://localhost:{port}/callback")
 }
 
+/// v2.1.319: validate an OAuth callback's redirect host. Only a
+/// `localhost`, `127.0.0.1`, or `::1` host on a port matching the
+/// expected loopback redirect port is accepted — any other host or
+/// port is rejected so a malicious redirect cannot exfiltrate tokens.
+/// Returns `Ok(true)` if the redirect is valid for the given port,
+/// `Ok(false)` otherwise.
+pub fn validate_oauth_callback_redirect(
+    redirect_uri: &str,
+    expected_port: u16,
+) -> Result<bool, String> {
+    let url = redirect_uri.trim();
+    // Parse scheme://host:port.
+    let without_scheme = url.split_once("://").map_or(url.as_ref(), |(_, rest)| rest);
+    let hostport = without_scheme.split('/').next().unwrap_or(without_scheme);
+    let (host, port) = match hostport.rfind(':') {
+        Some(sep) if hostport[..sep].contains(':') => {
+            // Bracketed IPv6 literal: `[::1]:port`.
+            let host = &hostport[..sep];
+            let port = &hostport[sep + 1..];
+            (host, port)
+        }
+        Some(sep) => {
+            let host = &hostport[..sep];
+            let port = &hostport[sep + 1..];
+            (host, port)
+        }
+        None => (hostport, ""),
+    };
+    let host_is_loopback =
+        matches!(host, "localhost" | "127.0.0.1" | "::1") || host.starts_with("127.");
+    let port_matches = if port.is_empty() {
+        // No port in the redirect — accept only if the expected port is
+        // the implicit default for the scheme.
+        expected_port == 80
+    } else {
+        port == expected_port.to_string()
+    };
+    Ok(host_is_loopback && port_matches)
+}
+
 pub fn credentials_path() -> io::Result<PathBuf> {
     Ok(credentials_home_dir()?.join("credentials.json"))
 }
@@ -322,6 +362,30 @@ pub fn parse_oauth_callback_query(query: &str) -> Result<OAuthCallbackParams, St
         error: params.get("error").cloned(),
         error_description: params.get("error_description").cloned(),
     })
+}
+
+/// v2.1.319: validate that an OAuth callback redirect URI is a loopback
+/// address on the expected port. Rejects any non-loopback host so a
+/// malicious redirect cannot exfiltrate tokens.
+#[must_use]
+pub fn is_valid_oauth_callback_host(redirect_uri: &str, expected_port: u16) -> bool {
+    // Extract host:port from scheme://host:port/path
+    let without_scheme = redirect_uri
+        .strip_prefix("http://")
+        .or_else(|| redirect_uri.strip_prefix("https://"))
+        .unwrap_or(redirect_uri);
+    let hostport = without_scheme.split('/').next().unwrap_or(without_scheme);
+    let (host, port_str) = match hostport.rfind(':') {
+        Some(sep) => {
+            let host = &hostport[..sep];
+            let port = &hostport[sep + 1..];
+            (host, port)
+        }
+        None => (hostport, ""),
+    };
+    let port: u16 = port_str.parse().unwrap_or(0);
+    let host_ok = matches!(host, "localhost" | "127.0.0.1" | "[::1]" | "::1");
+    host_ok && port == expected_port
 }
 
 fn generate_random_token(bytes: usize) -> io::Result<String> {
@@ -466,9 +530,10 @@ mod tests {
 
     use super::{
         clear_oauth_credentials, code_challenge_s256, credentials_path, generate_pkce_pair,
-        generate_state, load_oauth_credentials, loopback_redirect_uri, parse_oauth_callback_query,
-        parse_oauth_callback_request_target, save_oauth_credentials, OAuthAuthorizationRequest,
-        OAuthConfig, OAuthRefreshRequest, OAuthTokenExchangeRequest, OAuthTokenSet,
+        generate_state, is_valid_oauth_callback_host, load_oauth_credentials,
+        loopback_redirect_uri, parse_oauth_callback_query, parse_oauth_callback_request_target,
+        save_oauth_credentials, OAuthAuthorizationRequest, OAuthConfig, OAuthRefreshRequest,
+        OAuthTokenExchangeRequest, OAuthTokenSet,
     };
 
     fn sample_config() -> OAuthConfig {
@@ -599,5 +664,39 @@ mod tests {
         assert_eq!(params.code.as_deref(), Some("abc"));
         assert_eq!(params.state.as_deref(), Some("xyz"));
         assert!(parse_oauth_callback_request_target("/wrong?code=abc").is_err());
+    }
+
+    #[test]
+    fn oauth_redirect_host_validation() {
+        // v2.1.319: only loopback hosts on the expected port are accepted.
+        assert!(is_valid_oauth_callback_host(
+            "http://localhost:54545/callback",
+            54545
+        ));
+        assert!(is_valid_oauth_callback_host(
+            "http://127.0.0.1:54545/callback",
+            54545
+        ));
+        assert!(is_valid_oauth_callback_host(
+            "http://[::1]:54545/callback",
+            54545
+        ));
+        // A different host or port is rejected.
+        assert!(!is_valid_oauth_callback_host(
+            "https://evil.example/callback",
+            54545
+        ));
+        assert!(!is_valid_oauth_callback_host(
+            "http://localhost:1/callback",
+            54545
+        ));
+        assert!(!is_valid_oauth_callback_host(
+            "http://localhost.evil.example:54545/cb",
+            54545
+        ));
+        // The generated loopback URI validates against its own port.
+        let uri = loopback_redirect_uri(54545);
+        assert!(is_valid_oauth_callback_host(&uri, 54545));
+        assert!(!is_valid_oauth_callback_host(&uri, 54546));
     }
 }

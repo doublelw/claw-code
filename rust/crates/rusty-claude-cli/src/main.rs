@@ -2013,8 +2013,10 @@ fn resolve_model_alias(model: &str) -> &str {
         "haiku5-5" | "haiku-5-5" => "anthropic/claude-haiku-5-5",
         // v2.1.197: Haiku 4.5 remains a valid (non-default) Haiku id.
         "haiku4-5" | "haiku-4-5" => "anthropic/claude-haiku-4-5-20251213",
-        // v2.1.257: Fable 5.1 is now the default Fable model (1M context).
-        "fable" | "fable5" => "anthropic/claude-fable-5-1",
+        // v2.1.321: Fable 5.2 is now the default Fable model
+        // (1M context, $8/$40 per Mtok, $0.20/Mtok cache reads).
+        "fable" | "fable5-2" | "fable-5-2" => "anthropic/claude-fable-5-2",
+        // v2.1.257: Fable 5.1 remains a valid (non-default) Fable id.
         "fable5-1" | "fable-5-1" => "anthropic/claude-fable-5-1",
         _ => model,
     }
@@ -2038,9 +2040,9 @@ pub fn deprecated_model_replacement(model: &str) -> Option<&'static str> {
     {
         return Some("anthropic/claude-opus-5");
     }
-    // Old Fable 5 (non-.1) → Fable 5.1 (v2.1.257 default Fable)
+    // Old Fable 5 (non-.1/.2) → Fable 5.2 (v2.1.321 default Fable)
     if lower.ends_with("claude-fable-5") || lower == "fable-5" || lower == "fable5" {
-        return Some("anthropic/claude-fable-5-1");
+        return Some("anthropic/claude-fable-5-2");
     }
     None
 }
@@ -2052,19 +2054,25 @@ pub fn deprecated_model_replacement(model: &str) -> Option<&'static str> {
 #[must_use]
 pub fn normalize_model_name(model: &str) -> String {
     let trimmed = model.trim();
+    // v2.1.307: with CLAUDE_CODE_DISABLE_1M_CONTEXT set, aliases carrying a
+    // `[1m]` suffix must still resolve to a valid model id instead of
+    // erroring — the suffix is stripped and the alias canonicalized below.
     // Strip an optional trailing [1m] / [1M] context-window suffix
     let stripped = trimmed
         .strip_suffix("[1m]")
         .or_else(|| trimmed.strip_suffix("[1M]"))
         .map(str::trim)
         .unwrap_or(trimmed);
-    // Canonicalize Fable 5 family name variants (v2.1.257: 5.1 is the default)
+    // Canonicalize Fable 5 family name variants (v2.1.321: 5.2 is the default)
     let lower = stripped.to_lowercase();
     if lower == "fable" || lower == "fable-5" || lower == "fable5" || lower == "claude-fable-5" {
-        return "anthropic/claude-fable-5-1".to_string();
+        return "anthropic/claude-fable-5-2".to_string();
     }
     if lower == "fable5-1" || lower == "fable-5-1" || lower == "claude-fable-5-1" {
         return "anthropic/claude-fable-5-1".to_string();
+    }
+    if lower == "fable5-2" || lower == "fable-5-2" || lower == "claude-fable-5-2" {
+        return "anthropic/claude-fable-5-2".to_string();
     }
     stripped.to_string()
 }
@@ -17656,28 +17664,41 @@ mod alias_resolution_tests {
         // [1m] stripped; fable variant canonicalized to full id
         assert_eq!(
             normalize_model_name("claude-fable-5[1m]"),
-            "anthropic/claude-fable-5-1"
+            "anthropic/claude-fable-5-2"
         );
         // Non-fable models: [1m] stripped, id otherwise unchanged
         assert_eq!(
             normalize_model_name("anthropic/claude-opus-4-6[1M]"),
             "anthropic/claude-opus-4-6"
         );
+        // v2.1.307: with CLAUDE_CODE_DISABLE_1M_CONTEXT set, an alias with a
+        // [1m] suffix still resolves to a valid model id instead of erroring.
+        std::env::set_var("CLAUDE_CODE_DISABLE_1M_CONTEXT", "1");
+        assert_eq!(
+            normalize_model_name("opus[1m]"),
+            "opus",
+            "[1m] stripped; alias resolution handles the base id"
+        );
+        assert_eq!(
+            normalize_model_name("fable-5-2[1m]"),
+            "anthropic/claude-fable-5-2"
+        );
+        std::env::remove_var("CLAUDE_CODE_DISABLE_1M_CONTEXT");
     }
 
     #[test]
     fn normalize_canonicalizes_fable_variants() {
         assert_eq!(
             normalize_model_name("fable-5"),
-            "anthropic/claude-fable-5-1"
+            "anthropic/claude-fable-5-2"
         );
-        assert_eq!(normalize_model_name("FABLE5"), "anthropic/claude-fable-5-1");
-        assert_eq!(normalize_model_name("fable"), "anthropic/claude-fable-5-1");
+        assert_eq!(normalize_model_name("FABLE5"), "anthropic/claude-fable-5-2");
+        assert_eq!(normalize_model_name("fable"), "anthropic/claude-fable-5-2");
     }
 
     #[test]
     fn is_fable_5_detects_family() {
-        assert!(is_fable_5("anthropic/claude-fable-5-1"));
+        assert!(is_fable_5("anthropic/claude-fable-5-2"));
         assert!(is_fable_5("fable-5[1m]"));
         assert!(!is_fable_5("anthropic/claude-opus-4-6"));
     }
@@ -17686,12 +17707,12 @@ mod alias_resolution_tests {
     fn fable_alias_resolves_through_config() {
         assert_eq!(
             resolve_model_alias_with_config("fable"),
-            "anthropic/claude-fable-5-1"
+            "anthropic/claude-fable-5-2"
         );
         // [1m] suffix stripped during resolution
         assert_eq!(
             resolve_model_alias_with_config("fable-5[1m]"),
-            "anthropic/claude-fable-5-1"
+            "anthropic/claude-fable-5-2"
         );
     }
 
@@ -17727,11 +17748,11 @@ mod alias_resolution_tests {
         // v2.1.257: old Fable 5 ids upgrade to Fable 5.1
         assert_eq!(
             deprecated_model_replacement("anthropic/claude-fable-5"),
-            Some("anthropic/claude-fable-5-1")
+            Some("anthropic/claude-fable-5-2")
         );
         assert_eq!(
             deprecated_model_replacement("fable-5"),
-            Some("anthropic/claude-fable-5-1")
+            Some("anthropic/claude-fable-5-2")
         );
     }
 

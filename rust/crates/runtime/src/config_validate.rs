@@ -472,6 +472,11 @@ const PERMISSIONS_FIELDS: &[FieldSpec] = &[
         name: "disallowedTools",
         expected: FieldType::StringArray,
     },
+    // v2.1.319: deny instead of waiting on a permission prompt.
+    FieldSpec {
+        name: "denyInsteadOfPrompting",
+        expected: FieldType::Bool,
+    },
 ];
 
 const PLUGINS_FIELDS: &[FieldSpec] = &[
